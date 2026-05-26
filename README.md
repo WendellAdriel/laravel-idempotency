@@ -109,6 +109,10 @@ If you prefer middleware aliases, the package also registers `idempotent` as a r
 Route::post('/orders', StoreOrderController::class)->middleware('idempotent');
 ```
 
+The `idempotent` alias uses the configured `idempotency.header` value. If your client sends `X-Idempotency-Key`, set `IDEMPOTENCY_HEADER=X-Idempotency-Key` or publish the config and update the `header` option. Alternatively, use `Idempotent::using(header: 'X-Idempotency-Key')` on the route.
+
+Make sure the client reuses the same idempotency key when retrying the same submission. If a frontend receives or generates a fresh key after every successful request, each request is treated as a new operation and appears as a separate row in `idempotency:list`.
+
 ### Attribute
 
 If you prefer attributes, you may use the package's `#[Idempotent]` attribute. The attribute applies the same middleware and accepts the same `ttl`, `lockTimeout`, `required`, `scope`, and `header` options.

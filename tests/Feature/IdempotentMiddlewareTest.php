@@ -30,6 +30,12 @@ beforeEach(function (): void {
             return response()->json(['id' => 1]);
         })->middleware(Idempotent::using(header: 'X-Idempotency-Key'));
 
+        Route::post('/payments/registration', function () {
+            test()->controllerExecutionCount++;
+
+            return response()->json(['registered' => true]);
+        })->middleware('idempotent')->name('payment-registration');
+
         Route::post('/orders/user-scope', fn () => response()->json(['id' => 1]))->middleware(Idempotent::using(scope: IdempotencyScope::User));
 
         Route::post('/orders/ip-scope', fn () => response()->json(['id' => 1]))->middleware(Idempotent::using(scope: IdempotencyScope::Ip));
@@ -187,6 +193,84 @@ test('custom header name works when configured on middleware', function (): void
 test('default header is ignored when custom header is configured', function (): void {
     $this->postJson('/orders/custom-header', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
         ->assertBadRequest();
+});
+
+test('route alias replays inertia-like submissions when x idempotency header is configured', function (): void {
+    config()->set('idempotency.header', 'X-Idempotency-Key');
+
+    $headers = [
+        'X-Idempotency-Key' => 'payment-key-1',
+        'X-Inertia' => 'true',
+        'Accept' => 'text/html, application/xhtml+xml',
+    ];
+
+    $this->postJson('/payments/registration', ['account' => 'bank'], $headers)
+        ->assertOk()
+        ->assertHeaderMissing('Idempotency-Replayed');
+
+    $this->postJson('/payments/registration', ['account' => 'bank'], $headers)
+        ->assertOk()
+        ->assertJson(['registered' => true])
+        ->assertHeader('Idempotency-Replayed', 'true');
+
+    $index = $this->app->make(IdempotencyIndex::class);
+
+    expect($this->controllerExecutionCount)->toBe(1)
+        ->and($index->forMember(IdempotencyScope::Ip, '127.0.0.1'))->toHaveCount(1);
+});
+
+test('route alias replays x idempotency header submissions for authenticated users', function (): void {
+    config()->set('idempotency.header', 'X-Idempotency-Key');
+
+    $this->actingAs(new GenericUser(['id' => 7]));
+
+    $this->postJson('/payments/registration', ['account' => 'bank'], ['X-Idempotency-Key' => 'payment-key-1']);
+
+    $this->postJson('/payments/registration', ['account' => 'bank'], ['X-Idempotency-Key' => 'payment-key-1'])
+        ->assertOk()
+        ->assertHeader('Idempotency-Replayed', 'true');
+
+    $index = $this->app->make(IdempotencyIndex::class);
+
+    expect($this->controllerExecutionCount)->toBe(1)
+        ->and($index->forMember(IdempotencyScope::User, '7'))->toHaveCount(1);
+});
+
+test('route alias with default config rejects x idempotency header only', function (): void {
+    $this->postJson('/payments/registration', ['account' => 'bank'], ['X-Idempotency-Key' => 'payment-key-1'])
+        ->assertBadRequest()
+        ->assertJsonPath('message', 'Missing required header: Idempotency-Key');
+});
+
+test('configured x idempotency header makes the route alias replay correctly', function (): void {
+    config()->set('idempotency.header', 'X-Idempotency-Key');
+
+    $this->postJson('/payments/registration', ['account' => 'bank'], ['X-Idempotency-Key' => 'payment-key-1']);
+
+    $this->postJson('/payments/registration', ['account' => 'bank'], ['X-Idempotency-Key' => 'payment-key-1'])
+        ->assertOk()
+        ->assertHeader('Idempotency-Replayed', 'true');
+});
+
+test('repeated submissions with regenerated keys create separate index entries', function (): void {
+    config()->set('idempotency.header', 'X-Idempotency-Key');
+
+    $this->actingAs(new GenericUser(['id' => 7]));
+
+    $this->postJson('/payments/registration', ['account' => 'bank'], ['X-Idempotency-Key' => 'payment-key-1']);
+    $this->postJson('/payments/registration', ['account' => 'bank'], ['X-Idempotency-Key' => 'payment-key-2'])
+        ->assertOk()
+        ->assertHeaderMissing('Idempotency-Replayed');
+
+    $index = $this->app->make(IdempotencyIndex::class);
+    $members = $index->forMember(IdempotencyScope::User, '7');
+
+    expect($this->controllerExecutionCount)->toBe(2)
+        ->and($members)->toHaveCount(2)
+        ->and(array_map(fn ($member) => $member->clientKey, $members))->toBe([
+            'payment-key-1',
+            'payment-key-2',
+        ]);
 });
 
 test('user scope isolates different authenticated users', function (): void {
