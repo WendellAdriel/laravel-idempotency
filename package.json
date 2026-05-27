@@ -1,0 +1,14 @@
+{
+  "name": "laravel-idempotency",
+  "private": true,
+  "type": "module",
+  "description": "HTTP idempotency middleware for Laravel applications",
+  "scripts": {
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.4"
+  }
+}

@@ -1,0 +1,43 @@
+:root {
+  --vp-font-family-base: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+  --vp-font-family-mono: 'Cascadia Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  --vp-c-brand-1: #d60000;
+  --vp-c-brand-2: #ef1b1b;
+  --vp-c-brand-3: #ff4d4d;
+  --vp-c-brand-soft: rgba(239, 27, 27, 0.16);
+}
+
+.dark {
+  --vp-c-brand-1: #ff6b6b;
+  --vp-c-brand-2: #ff3b3b;
+  --vp-c-brand-3: #ef1b1b;
+  --vp-c-brand-soft: rgba(255, 59, 59, 0.18);
+}
+
+body,
+.VPNav,
+.VPSidebar,
+.VPDoc,
+.VPDocAside,
+.vp-doc {
+  font-family: var(--vp-font-family-base);
+}
+
+.vp-doc h1,
+.vp-doc h2,
+.vp-doc h3,
+.vp-doc h4,
+.vp-doc h5,
+.vp-doc h6 {
+  font-family: var(--vp-font-family-base);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.vp-doc code,
+.vp-doc pre,
+.vp-doc kbd,
+.vp-doc samp {
+  font-family: var(--vp-font-family-mono);
+}
