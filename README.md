@@ -105,7 +105,7 @@ Access the full documentation [here](https://laravel-idempotency.wendelladriel.c
 
 ## Changelog
 
-Please see [CHANGELOG](https://laravel-idempotency.wendelladriel.com/changelog) for more information on what has changed recently.
+Please see [CHANGELOG](https://laravel-idempotency.wendelladriel.com/getting-started/changelog) for more information on what has changed recently.
 
 ## Contributing
 

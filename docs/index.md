@@ -46,9 +46,9 @@ If the same key is reused with different request data, the package returns `422 
 
 Read the docs in this order if you are adding Laravel Idempotency to an application for the first time:
 
-- [Installation](installation.md)
-- [Configuration](configuration.md)
-- [Usage](usage.md)
-- [Scopes](scopes.md)
-- [Generating keys](generating-keys.md)
-- [Maintenance commands](maintenance-commands.md)
+- [Installation](getting-started/installation.md)
+- [Configuration](getting-started/configuration.md)
+- [Usage](basics/usage.md)
+- [Scopes](basics/scopes.md)
+- [Generating keys](basics/generating-keys.md)
+- [Maintenance commands](operations/maintenance-commands.md)

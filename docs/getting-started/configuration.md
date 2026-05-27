@@ -55,7 +55,7 @@ The `scope` option controls how client-provided keys are segmented:
 'scope' => env('IDEMPOTENCY_SCOPE', IdempotencyScope::User->value),
 ```
 
-Supported values are `user`, `ip`, and `global`. See [scopes](scopes.md) for the behavior of each option.
+Supported values are `user`, `ip`, and `global`. See [scopes](../basics/scopes.md) for the behavior of each option.
 
 ## Header name
 

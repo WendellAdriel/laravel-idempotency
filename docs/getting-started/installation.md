@@ -37,4 +37,4 @@ php artisan vendor:publish --tag="idempotency-config"
 
 ## Next steps
 
-After installation, review the [configuration options](configuration.md), choose a [scope](scopes.md), and attach the middleware or attribute to the endpoints that need safe retries.
+After installation, review the [configuration options](configuration.md), choose a [scope](../basics/scopes.md), and attach the middleware or attribute to the endpoints that need safe retries.

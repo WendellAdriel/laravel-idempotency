@@ -29,13 +29,28 @@ export default defineConfig({
   themeConfig: {
     sidebar: [
       { text: 'Overview', link: '/' },
-      { text: 'Installation', link: '/installation' },
-      { text: 'Configuration', link: '/configuration' },
-      { text: 'Usage', link: '/usage' },
-      { text: 'Scopes', link: '/scopes' },
-      { text: 'Generating Keys', link: '/generating-keys' },
-      { text: 'Maintenance Commands', link: '/maintenance-commands' },
-      { text: 'Changelog', link: '/changelog' },
+      {
+        text: 'Getting Started',
+        items: [
+          { text: 'Installation', link: '/getting-started/installation' },
+          { text: 'Configuration', link: '/getting-started/configuration' },
+          { text: 'Changelog', link: '/getting-started/changelog' },
+        ],
+      },
+      {
+        text: 'The Basics',
+        items: [
+          { text: 'Usage', link: '/basics/usage' },
+          { text: 'Scopes', link: '/basics/scopes' },
+          { text: 'Generating Keys', link: '/basics/generating-keys' },
+        ],
+      },
+      {
+        text: 'Operations',
+        items: [
+          { text: 'Maintenance Commands', link: '/operations/maintenance-commands' },
+        ],
+      },
     ],
     search: {
       provider: 'local',
