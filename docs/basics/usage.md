@@ -1,0 +1,121 @@
+# Usage
+
+- [Route middleware](#route-middleware)
+- [Custom middleware options](#custom-middleware-options)
+- [Middleware alias](#middleware-alias)
+- [Controller attribute](#controller-attribute)
+- [Client behavior](#client-behavior)
+
+## Route middleware
+
+Attach the middleware to the routes that create or update data:
+
+```php
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
+use WendellAdriel\Idempotency\Http\Middleware\Idempotent;
+
+Route::post('/orders', function (Request $request) {
+    return response()->json([
+        'id' => 1,
+        'item' => $request->input('item'),
+    ], 201);
+})->middleware(Idempotent::class);
+```
+
+By default, the middleware only handles `POST`, `PUT`, and `PATCH` requests. Other HTTP methods pass through unchanged.
+
+The middleware expects an `Idempotency-Key` header by default. If the header is missing and idempotency is required, the package returns `400 Bad Request`.
+
+When the same key is sent again with the same request data, the original response is replayed and the response includes an `Idempotency-Replayed: true` header.
+
+## Custom middleware options
+
+Use the `Idempotent::using` helper when a route needs options that differ from the config file:
+
+```php
+use WendellAdriel\Idempotency\Enums\IdempotencyScope;
+use WendellAdriel\Idempotency\Http\Middleware\Idempotent;
+
+Route::post('/payments', ChargePaymentController::class)->middleware(
+    Idempotent::using(
+        ttl: 600,
+        required: false,
+        scope: IdempotencyScope::Ip,
+        header: 'X-Idempotency-Key',
+        lockTimeout: 30,
+    )
+);
+```
+
+The route-level options are serialized into the middleware string and override the package configuration for that route only.
+
+## Middleware alias
+
+Laravel Idempotency registers `idempotent` as a route middleware alias:
+
+```php
+Route::post('/orders', StoreOrderController::class)->middleware('idempotent');
+```
+
+The alias uses the configured `idempotency.header` value. If your client sends `X-Idempotency-Key`, set `IDEMPOTENCY_HEADER=X-Idempotency-Key` or use `Idempotent::using(header: 'X-Idempotency-Key')` on the route.
+
+## Controller attribute
+
+If you prefer attributes, use the package's `#[Idempotent]` attribute. The attribute applies the same middleware and accepts the same `ttl`, `required`, `scope`, `header`, and `lockTimeout` options.
+
+```php
+namespace App\Http\Controllers;
+
+use Symfony\Component\HttpFoundation\Response;
+use WendellAdriel\Idempotency\Attributes\Idempotent;
+
+#[Idempotent]
+class OrderController
+{
+    public function store(): Response
+    {
+        // ...
+    }
+}
+```
+
+You may also place the attribute on individual methods. Method-level attributes are merged with class-level attributes.
+
+```php
+namespace App\Http\Controllers;
+
+use WendellAdriel\Idempotency\Attributes\Idempotent;
+use WendellAdriel\Idempotency\Enums\IdempotencyScope;
+
+#[Idempotent]
+class PaymentController
+{
+    #[Idempotent(ttl: 600, scope: IdempotencyScope::Ip, header: 'X-Idempotency-Key', lockTimeout: 30)]
+    public function store()
+    {
+        // ...
+    }
+
+    public function update()
+    {
+        // ...
+    }
+}
+```
+
+Since the attribute extends Laravel's controller middleware attribute, you may limit it to selected methods using `only` and `except`:
+
+```php
+#[Idempotent(except: ['store'])]
+class OrderController
+{
+    // ...
+}
+```
+
+## Client behavior
+
+Clients should reuse the same idempotency key when retrying the same submission. If a frontend receives or generates a fresh key after every successful request, each request is treated as a new operation and appears as a separate row in `idempotency:list`.
+
+If the same key is reused with different request data, the package returns `422 Unprocessable Entity`. If a second matching request arrives while the first request is still being processed, the package returns `409 Conflict` with `Retry-After: 1`.
