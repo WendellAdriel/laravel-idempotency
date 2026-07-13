@@ -49,6 +49,17 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Idempotency Request Input
+    |--------------------------------------------------------------------------
+    |
+    | This request input will be inspected when the configured header does
+    | not contain a non-empty idempotency key.
+    |
+    */
+    'input' => env('IDEMPOTENCY_INPUT', '_idempotency_key'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Idempotency Lock Timeout
     |--------------------------------------------------------------------------
     |

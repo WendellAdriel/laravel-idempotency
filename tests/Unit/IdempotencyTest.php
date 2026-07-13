@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use WendellAdriel\Idempotency\Enums\IdempotencyScope;
 use WendellAdriel\Idempotency\Idempotency;
 use WendellAdriel\Idempotency\Support\IdempotencyOptions;
 
@@ -20,7 +21,8 @@ test('it registers the expanded package config defaults', function (): void {
         ->and(config()->integer('idempotency.lock_timeout'))->toBe(10)
         ->and(config()->boolean('idempotency.required'))->toBeTrue()
         ->and(config('idempotency.scope'))->toBe('user')
-        ->and(config('idempotency.header'))->toBe('Idempotency-Key');
+        ->and(config('idempotency.header'))->toBe('Idempotency-Key')
+        ->and(config('idempotency.input'))->toBe('_idempotency_key');
 });
 
 test('it supports env-backed config overrides', function (): void {
@@ -29,20 +31,42 @@ test('it supports env-backed config overrides', function (): void {
     putenv('IDEMPOTENCY_REQUIRED=false');
     putenv('IDEMPOTENCY_SCOPE=global');
     putenv('IDEMPOTENCY_HEADER=X-Idempotency-Key');
+    putenv('IDEMPOTENCY_INPUT=_request_key');
 
     $config = require __DIR__ . '/../../config/idempotency.php';
-
-    expect((int) $config['ttl'])->toBe(120)
-        ->and((int) $config['lock_timeout'])->toBe(45)
-        ->and((bool) $config['required'])->toBeFalse()
-        ->and($config['scope'])->toBe('global')
-        ->and($config['header'])->toBe('X-Idempotency-Key');
 
     putenv('IDEMPOTENCY_TTL');
     putenv('IDEMPOTENCY_LOCK_TIMEOUT');
     putenv('IDEMPOTENCY_REQUIRED');
     putenv('IDEMPOTENCY_SCOPE');
     putenv('IDEMPOTENCY_HEADER');
+    putenv('IDEMPOTENCY_INPUT');
+
+    expect((int) $config['ttl'])->toBe(120)
+        ->and((int) $config['lock_timeout'])->toBe(45)
+        ->and((bool) $config['required'])->toBeFalse()
+        ->and($config['scope'])->toBe('global')
+        ->and($config['header'])->toBe('X-Idempotency-Key')
+        ->and($config['input'])->toBe('_request_key');
+});
+
+test('it resolves the request input name from config', function (): void {
+    config()->set('idempotency.input', '_request_key');
+
+    expect(IdempotencyOptions::resolve()->input)->toBe('_request_key');
+});
+
+test('options accept the legacy positional constructor arguments', function (): void {
+    $options = new IdempotencyOptions(
+        3600,
+        true,
+        IdempotencyScope::User,
+        'Idempotency-Key',
+        10,
+    );
+
+    expect($options->input)->toBe('_idempotency_key')
+        ->and($options->serialize())->toBe('3600,1,user,Idempotency-Key,10');
 });
 
 test('lock_timeout of zero is rejected', function (): void {

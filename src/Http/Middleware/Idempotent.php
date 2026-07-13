@@ -70,6 +70,10 @@ final readonly class Idempotent
         $clientKey = $request->header($options->header);
 
         if (! is_string($clientKey) || $clientKey === '') {
+            $clientKey = $request->input($options->input);
+        }
+
+        if (! is_string($clientKey) || $clientKey === '') {
             if ($options->required) {
                 throw new HttpException(Response::HTTP_BAD_REQUEST, sprintf('Missing required header: %s', $options->header));
             }

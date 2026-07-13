@@ -1,6 +1,7 @@
 # Usage
 
 - [Route middleware](#route-middleware)
+- [Request input](#request-input)
 - [Custom middleware options](#custom-middleware-options)
 - [Middleware alias](#middleware-alias)
 - [Controller attribute](#controller-attribute)
@@ -25,9 +26,38 @@ Route::post('/orders', function (Request $request) {
 
 By default, the middleware only handles `POST`, `PUT`, and `PATCH` requests. Other HTTP methods pass through unchanged.
 
-The middleware expects an `Idempotency-Key` header by default. If the header is missing and idempotency is required, the package returns `400 Bad Request`.
+The middleware reads the key from the `Idempotency-Key` header or the `_idempotency_key` request input by default. If neither value contains a non-empty string and idempotency is required, the package returns `400 Bad Request`.
 
 When the same key is sent again with the same request data, the original response is replayed and the response includes an `Idempotency-Replayed: true` header.
+
+## Request input
+
+Standard HTML forms cannot set custom request headers. You may include the idempotency key in a hidden input instead:
+
+```blade
+<form method="POST" action="/orders">
+    @csrf
+    @idempotency
+
+    <input type="text" name="item">
+
+    <button type="submit">Create order</button>
+</form>
+```
+
+The `@idempotency` directive renders the configured hidden input with a new key from `Idempotency::key()`. To use a key generated elsewhere, pass it to the directive:
+
+```blade
+@idempotency($idempotencyKey)
+```
+
+Reuse the same value when retrying the same submission. See [generating keys](generating-keys.md) for more information about application-generated keys.
+
+The configured header takes precedence when both sources contain a non-empty string. To use a different request input name, set `IDEMPOTENCY_INPUT` in your environment file:
+
+```ini
+IDEMPOTENCY_INPUT=_request_key
+```
 
 ## Custom middleware options
 
@@ -58,7 +88,7 @@ Laravel Idempotency registers `idempotent` as a route middleware alias:
 Route::post('/orders', StoreOrderController::class)->middleware('idempotent');
 ```
 
-The alias uses the configured `idempotency.header` value. If your client sends `X-Idempotency-Key`, set `IDEMPOTENCY_HEADER=X-Idempotency-Key` or use `Idempotent::using(header: 'X-Idempotency-Key')` on the route.
+The alias uses the configured `idempotency.header` and `idempotency.input` values. If your client sends `X-Idempotency-Key`, set `IDEMPOTENCY_HEADER=X-Idempotency-Key` or use `Idempotent::using(header: 'X-Idempotency-Key')` on the route.
 
 ## Controller attribute
 
@@ -116,6 +146,6 @@ class OrderController
 
 ## Client behavior
 
-Clients should reuse the same idempotency key when retrying the same submission. If a frontend receives or generates a fresh key after every successful request, each request is treated as a new operation and appears as a separate row in `idempotency:list`.
+Clients should reuse the same idempotency key in the configured header or request input when retrying the same submission. If a frontend receives or generates a fresh key after every successful request, each request is treated as a new operation and appears as a separate row in `idempotency:list`.
 
 If the same key is reused with different request data, the package returns `422 Unprocessable Entity`. If a second matching request arrives while the first request is still being processed, the package returns `409 Conflict` with `Retry-After: 1`.

@@ -2,9 +2,10 @@
 
 - [Introduction](#introduction)
 - [Time to live](#time-to-live)
-- [Required header](#required-header)
+- [Required key](#required-key)
 - [Scope](#scope)
 - [Header name](#header-name)
+- [Request input name](#request-input-name)
 - [Lock timeout](#lock-timeout)
 
 ## Introduction
@@ -15,7 +16,7 @@ Laravel Idempotency stores its application-level options in `config/idempotency.
 php artisan vendor:publish --tag="idempotency-config"
 ```
 
-The default configuration is intentionally small. It controls stored response lifetime, header behavior, scope resolution, and the in-flight lock timeout.
+The default configuration is intentionally small. It controls stored response lifetime, key input behavior, scope resolution, and the in-flight lock timeout.
 
 ```php
 return [
@@ -23,6 +24,7 @@ return [
     'required' => env('IDEMPOTENCY_REQUIRED', true),
     'scope' => env('IDEMPOTENCY_SCOPE', IdempotencyScope::User->value),
     'header' => env('IDEMPOTENCY_HEADER', 'Idempotency-Key'),
+    'input' => env('IDEMPOTENCY_INPUT', '_idempotency_key'),
     'lock_timeout' => env('IDEMPOTENCY_LOCK_TIMEOUT', 10),
 ];
 ```
@@ -37,15 +39,15 @@ The `ttl` option defines how long a stored response remains available, in second
 
 Use a value long enough for the retry window your clients need. After the TTL expires, the same idempotency key is treated as a new request.
 
-## Required header
+## Required key
 
-The `required` option determines whether protected requests must include the configured idempotency header:
+The `required` option determines whether protected requests must include a non-empty idempotency key in the configured header or request input:
 
 ```php
 'required' => env('IDEMPOTENCY_REQUIRED', true),
 ```
 
-When this is `true`, a missing header returns `400 Bad Request`. When this is `false`, requests without the header pass through and are not stored.
+When this is `true`, a missing key returns `400 Bad Request`. When this is `false`, requests without a valid key pass through and are not stored.
 
 ## Scope
 
@@ -59,13 +61,23 @@ Supported values are `user`, `ip`, and `global`. See [scopes](../basics/scopes.m
 
 ## Header name
 
-The `header` option defines which request header contains the client-provided idempotency key:
+The `header` option defines the preferred request header for the client-provided idempotency key:
 
 ```php
 'header' => env('IDEMPOTENCY_HEADER', 'Idempotency-Key'),
 ```
 
 If your client sends `X-Idempotency-Key`, set `IDEMPOTENCY_HEADER=X-Idempotency-Key` or override the header for a single route.
+
+## Request input name
+
+The `input` option defines which request input is inspected when the configured header does not contain a non-empty string:
+
+```php
+'input' => env('IDEMPOTENCY_INPUT', '_idempotency_key'),
+```
+
+The default works with a hidden form input named `_idempotency_key`. To use `_request_key` instead, set `IDEMPOTENCY_INPUT=_request_key`. The header always takes precedence when both sources contain valid keys.
 
 ## Lock timeout
 

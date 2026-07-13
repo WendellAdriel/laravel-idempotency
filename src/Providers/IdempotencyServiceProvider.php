@@ -7,11 +7,13 @@ namespace WendellAdriel\Idempotency\Providers;
 use Illuminate\Cache\Repository;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Routing\Router;
+use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\ServiceProvider;
 use Override;
 use WendellAdriel\Idempotency\Console\Commands\ForgetCommand;
 use WendellAdriel\Idempotency\Console\Commands\ListCommand;
 use WendellAdriel\Idempotency\Http\Middleware\Idempotent;
+use WendellAdriel\Idempotency\Idempotency;
 use WendellAdriel\Idempotency\Support\IdempotencyCache;
 use WendellAdriel\Idempotency\Support\IdempotencyIndex;
 
@@ -25,6 +27,12 @@ final class IdempotencyServiceProvider extends ServiceProvider
             ],
             ['idempotency', 'idempotency-config']
         );
+
+        Blade::directive('idempotency', fn (string $expression): string => sprintf(
+            '<?php echo \\%s::field(%s); ?>',
+            Idempotency::class,
+            $expression,
+        ));
 
         $this->app->make(Router::class)->aliasMiddleware('idempotent', Idempotent::class);
 

@@ -15,6 +15,7 @@ final readonly class IdempotencyOptions
         public IdempotencyScope $scope,
         public string $header,
         public int $lockTimeout,
+        public string $input = '_idempotency_key',
     ) {}
 
     public static function resolve(
@@ -30,6 +31,7 @@ final readonly class IdempotencyOptions
             scope: IdempotencyScope::fromConfig($scope),
             header: $header ?? config()->string('idempotency.header'),
             lockTimeout: self::resolveLockTimeout($lockTimeout),
+            input: config()->string('idempotency.input'),
         );
     }
 
