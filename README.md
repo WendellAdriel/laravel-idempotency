@@ -45,7 +45,22 @@ Route::post('/orders', function (Request $request) {
 })->middleware(Idempotent::class);
 ```
 
-By default, the middleware expects an `Idempotency-Key` header. When the same key is sent again with the same request data, the package replays the original response instead of executing your route again.
+By default, the middleware reads the key from the `Idempotency-Key` header or the `_idempotency_key` request input. This allows standard HTML forms to include the key in a hidden input. When both values are present, the header takes precedence.
+
+Use the `@idempotency` Blade directive to render the hidden input with a generated key:
+
+```blade
+<form method="POST" action="/orders">
+    @csrf
+    @idempotency
+
+    <!-- ... -->
+</form>
+```
+
+You may pass an existing key with `@idempotency($key)`.
+
+When the same key is sent again with the same request data, the package replays the original response instead of executing your route again.
 
 Customize a single route with `Idempotent::using`:
 

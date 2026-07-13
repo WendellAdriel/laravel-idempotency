@@ -13,7 +13,7 @@ Use this skill when a Laravel application needs retry-safe write requests, idemp
 
 - install and configure `wendelladriel/laravel-idempotency` correctly
 - choose the smallest correct integration path for the app
-- apply middleware, attributes, and scopes using the package's public API
+- apply middleware, attributes, key inputs, and scopes using the package's public API
 
 ## Workflow
 
@@ -33,6 +33,7 @@ Use this skill when a Laravel application needs retry-safe write requests, idemp
   - `idempotency.required`
   - `idempotency.scope`
   - `idempotency.header`
+  - `idempotency.input`
 
 ### 3. Choose the integration style
 
@@ -70,6 +71,19 @@ Route::post('/payments', ChargePaymentController::class)
         header: 'X-Idempotency-Key',
     ));
 ```
+
+The package reads the key from the configured header first. When the header does not contain a non-empty string, it falls back to the configured request input, which defaults to `_idempotency_key`. Use the request input for standard HTML forms that cannot set custom headers.
+
+Use the `@idempotency` Blade directive to render the configured hidden input with a generated key:
+
+```blade
+<form method="POST" action="/orders">
+    @csrf
+    @idempotency
+</form>
+```
+
+Pass an existing key with `@idempotency($key)` when the application generates or stores the key elsewhere.
 
 ### 5. Apply the controller attribute
 
@@ -119,7 +133,7 @@ class PaymentController
 - verify repeated `POST`, `PUT`, or `PATCH` requests with the same key replay the original response
 - verify mismatched payloads return `422`
 - verify in-flight duplicate requests return `409` with `Retry-After: 1`
-- verify missing headers only pass through when `required` is disabled
+- verify requests without a valid header or request-input key only pass through when `required` is disabled
 
 ### 9. Maintain cached entries
 
