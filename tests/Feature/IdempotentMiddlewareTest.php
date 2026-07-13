@@ -119,6 +119,91 @@ test('replayed response does not execute the controller again', function (): voi
     expect($this->controllerExecutionCount)->toBe(1);
 });
 
+test('request input key replays standard form submissions', function (): void {
+    $payload = [
+        'item' => 'widget',
+        '_idempotency_key' => 'form-key-1',
+    ];
+
+    $this->post('/orders', $payload)
+        ->assertOk()
+        ->assertHeaderMissing('Idempotency-Replayed');
+
+    $this->post('/orders', $payload)
+        ->assertOk()
+        ->assertHeader('Idempotency-Replayed', 'true');
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
+test('custom request input key replays submissions', function (): void {
+    config()->set('idempotency.input', '_request_key');
+
+    $payload = [
+        'item' => 'widget',
+        '_request_key' => 'form-key-1',
+    ];
+
+    $this->post('/orders', $payload);
+
+    $this->post('/orders', $payload)
+        ->assertOk()
+        ->assertHeader('Idempotency-Replayed', 'true');
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
+test('default request input is ignored when a custom name is configured', function (): void {
+    config()->set('idempotency.input', '_request_key');
+
+    $this->postJson('/orders', [
+        'item' => 'widget',
+        '_idempotency_key' => 'form-key-1',
+    ])->assertBadRequest()
+        ->assertJsonPath('message', 'Missing required header: Idempotency-Key');
+});
+
+test('header takes precedence over request input', function (): void {
+    $payload = [
+        'item' => 'widget',
+        '_idempotency_key' => 'form-key-1',
+    ];
+
+    $this->postJson('/orders', $payload, ['Idempotency-Key' => 'header-key-1']);
+
+    $this->postJson('/orders', $payload, ['Idempotency-Key' => 'header-key-2'])
+        ->assertOk()
+        ->assertHeaderMissing('Idempotency-Replayed');
+
+    expect($this->controllerExecutionCount)->toBe(2);
+});
+
+test('header key containing zero takes precedence over request input', function (): void {
+    $this->postJson('/orders', [
+        'item' => 'widget',
+        '_idempotency_key' => 'form-key-1',
+    ], ['Idempotency-Key' => '0']);
+
+    $index = $this->app->make(IdempotencyIndex::class);
+    $members = $index->forMember(IdempotencyScope::Ip, '127.0.0.1');
+
+    expect($members)->toHaveCount(1)
+        ->and($members[0]->clientKey)->toBe('0');
+});
+
+test('empty header falls back to request input', function (): void {
+    $payload = [
+        'item' => 'widget',
+        '_idempotency_key' => 'form-key-1',
+    ];
+
+    $this->postJson('/orders', $payload, ['Idempotency-Key' => '']);
+
+    $this->postJson('/orders', $payload, ['Idempotency-Key' => ''])
+        ->assertOk()
+        ->assertHeader('Idempotency-Replayed', 'true');
+});
+
 test('same key with different payload returns 422', function (): void {
     $this->postJson('/orders', ['item' => 'widget'], ['Idempotency-Key' => 'key-1']);
 
@@ -174,10 +259,32 @@ test('missing key returns 400 when required', function (): void {
     $this->postJson('/orders', ['item' => 'widget'])->assertBadRequest();
 });
 
+test('empty and non-string request input keys return 400 when required', function (): void {
+    foreach (['', ['nested-key'], 123] as $clientKey) {
+        $this->postJson('/orders', [
+            'item' => 'widget',
+            '_idempotency_key' => $clientKey,
+        ])->assertBadRequest()
+            ->assertJsonPath('message', 'Missing required header: Idempotency-Key');
+    }
+});
+
 test('missing key passes through when optional', function (): void {
     $this->postJson('/orders/optional', ['item' => 'widget'])
         ->assertOk()
         ->assertJson(['id' => 1]);
+});
+
+test('invalid request input key passes through without an index entry when optional', function (): void {
+    $this->postJson('/orders/optional', [
+        'item' => 'widget',
+        '_idempotency_key' => ['nested-key'],
+    ])->assertOk()
+        ->assertJson(['id' => 1]);
+
+    $index = $this->app->make(IdempotencyIndex::class);
+
+    expect($index->all())->toBe([]);
 });
 
 test('custom header name works when configured on middleware', function (): void {
