@@ -500,6 +500,45 @@ test('negative lock_timeout on using() throws', function (): void {
         ->toThrow(InvalidArgumentException::class, 'The lock_timeout must be a positive integer (>= 1).');
 });
 
+test('zero ttl on using() throws', function (): void {
+    expect(fn (): string => Idempotent::using(ttl: 0))
+        ->toThrow(InvalidArgumentException::class, 'The ttl must be a positive integer (>= 1).');
+});
+
+test('negative ttl on using() throws', function (): void {
+    expect(fn (): string => Idempotent::using(ttl: -1))
+        ->toThrow(InvalidArgumentException::class, 'The ttl must be a positive integer (>= 1).');
+});
+
+test('ttl of exactly 1 is accepted and still replays', function (): void {
+    Route::middleware('web')->group(function (): void {
+        Route::post('/orders/min-ttl', fn () => response()->json(['id' => 1]))->middleware(Idempotent::using(ttl: 1));
+    });
+
+    $this->postJson('/orders/min-ttl', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
+        ->assertOk()
+        ->assertHeaderMissing('Idempotency-Replayed');
+
+    $this->postJson('/orders/min-ttl', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
+        ->assertOk()
+        ->assertHeader('Idempotency-Replayed', 'true');
+});
+
+test('zero configured ttl throws instead of silently skipping the cache', function (): void {
+    // Regression: Cache::put() with a ttl <= 0 stores nothing, which used to make
+    // the middleware silently stop deduplicating requests instead of failing loudly.
+    config()->set('idempotency.ttl', 0);
+
+    Route::middleware('web')->group(function (): void {
+        Route::post('/orders/zero-ttl', fn () => response()->json(['id' => 1]))->middleware(Idempotent::class);
+    });
+
+    $this->withoutExceptionHandling();
+
+    expect(fn () => $this->postJson('/orders/zero-ttl', ['item' => 'widget'], ['Idempotency-Key' => 'key-1']))
+        ->toThrow(InvalidArgumentException::class, 'The ttl must be a positive integer (>= 1).');
+});
+
 test('using() accepts the legacy positional argument order', function (): void {
     // Regression: the public API must keep the pre-lockTimeout positional order
     // (ttl, required, scope, header) working unchanged.

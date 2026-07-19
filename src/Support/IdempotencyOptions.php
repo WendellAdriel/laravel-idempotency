@@ -48,13 +48,17 @@ final readonly class IdempotencyOptions
 
     private static function resolveTtl(null|int|string $ttl): int
     {
-        if (is_int($ttl)) {
-            return $ttl;
+        $resolved = is_int($ttl)
+            ? $ttl
+            : ($ttl !== null
+                ? (int) $ttl
+                : config()->integer('idempotency.ttl'));
+
+        if ($resolved < 1) {
+            throw new InvalidArgumentException('The ttl must be a positive integer (>= 1).');
         }
 
-        return $ttl !== null
-            ? (int) $ttl
-            : config()->integer('idempotency.ttl');
+        return $resolved;
     }
 
     private static function resolveLockTimeout(null|int|string $lockTimeout): int
