@@ -39,6 +39,8 @@ The `ttl` option defines how long a stored response remains available, in second
 
 Use a value long enough for the retry window your clients need. After the TTL expires, the same idempotency key is treated as a new request.
 
+The `ttl` must resolve to a positive integer (`>= 1`). A value of `0` or lower throws an `InvalidArgumentException` when options are resolved, so a misconfigured `IDEMPOTENCY_TTL` fails fast instead of silently disabling deduplication.
+
 ## Required key
 
 The `required` option determines whether protected requests must include a non-empty idempotency key in the configured header or request input:
@@ -88,3 +90,5 @@ The `lock_timeout` option defines how long the in-flight atomic lock is held whi
 ```
 
 Increase this value for endpoints with long processing times. If the lock expires before the endpoint finishes, a concurrent request with the same key may proceed.
+
+Like `ttl`, the `lock_timeout` must resolve to a positive integer (`>= 1`). A value of `0` or lower throws an `InvalidArgumentException` when options are resolved.
