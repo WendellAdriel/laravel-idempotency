@@ -48,29 +48,24 @@ final readonly class IdempotencyOptions
 
     private static function resolveTtl(null|int|string $ttl): int
     {
-        $resolved = is_int($ttl)
-            ? $ttl
-            : ($ttl !== null
-                ? (int) $ttl
-                : config()->integer('idempotency.ttl'));
-
-        if ($resolved < 1) {
-            throw new InvalidArgumentException('The ttl must be a positive integer (>= 1).');
-        }
-
-        return $resolved;
+        return self::resolvePositiveInt($ttl, 'idempotency.ttl', 'ttl');
     }
 
     private static function resolveLockTimeout(null|int|string $lockTimeout): int
     {
-        $resolved = is_int($lockTimeout)
-            ? $lockTimeout
-            : ($lockTimeout !== null
-                ? (int) $lockTimeout
-                : config()->integer('idempotency.lock_timeout'));
+        return self::resolvePositiveInt($lockTimeout, 'idempotency.lock_timeout', 'lock_timeout');
+    }
+
+    private static function resolvePositiveInt(null|int|string $value, string $configKey, string $option): int
+    {
+        $resolved = match (true) {
+            is_int($value) => $value,
+            $value !== null => (int) $value,
+            default => config()->integer($configKey),
+        };
 
         if ($resolved < 1) {
-            throw new InvalidArgumentException('The lock_timeout must be a positive integer (>= 1).');
+            throw new InvalidArgumentException("The {$option} must be a positive integer (>= 1).");
         }
 
         return $resolved;
