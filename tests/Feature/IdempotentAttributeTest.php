@@ -89,6 +89,14 @@ test('attribute accepts the legacy positional argument order', function (): void
     ]);
 });
 
+test('attribute with zero ttl throws when the middleware string is resolved', function (): void {
+    // The attribute constructor calls IdempotentMiddleware::using() directly, a
+    // separate call site from the plain middleware usage - verify the ttl
+    // validation still fires when going through PHP attribute reflection.
+    expect(fn () => Route::post('/invalid-ttl-orders', [IdempotentAttributeInvalidTtlTestController::class, 'store'])->controllerMiddleware())
+        ->toThrow(InvalidArgumentException::class, 'The ttl must be a positive integer (>= 1).');
+});
+
 class IdempotentAttributeTestController
 {
     #[Idempotent]
@@ -136,6 +144,12 @@ class IdempotentAttributeExceptTestController
 
 #[Idempotent(600, false, IdempotencyScope::Ip, 'X-Idempotency-Key')]
 class IdempotentAttributePositionalTestController
+{
+    public function store(): void {}
+}
+
+#[Idempotent(ttl: 0)]
+class IdempotentAttributeInvalidTtlTestController
 {
     public function store(): void {}
 }

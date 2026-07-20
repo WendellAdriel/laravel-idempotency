@@ -2,6 +2,10 @@
 
 Here's a quick overview of the new features in the latest major versions of the package.
 
+## 1.3.0
+
+* Added validation that the idempotency `ttl` resolves to a positive integer, throwing when misconfigured instead of silently disabling deduplication.
+
 ## 1.2.0
 
 * Added configurable request-input idempotency keys for standard HTML form submissions.
