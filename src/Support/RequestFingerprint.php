@@ -96,16 +96,24 @@ final class RequestFingerprint
     }
 
     /**
-     * @return array{name: string, size: int, hash: string}
+     * @return array{name: string, size: int|null, hash: string}
      */
     private function describeFile(UploadedFile $file): array
     {
-        $hash = $file->isValid() ? hash_file('xxh128', $file->getPathname()) : false;
+        if (! $file->isValid()) {
+            return [
+                'name' => $file->getClientOriginalName(),
+                'size' => null,
+                'hash' => 'invalid:' . $file->getError(),
+            ];
+        }
+
+        $hash = hash_file('xxh128', $file->getPathname());
 
         return [
             'name' => $file->getClientOriginalName(),
             'size' => $file->getSize(),
-            'hash' => $hash !== false ? $hash : 'invalid',
+            'hash' => $hash !== false ? $hash : 'unreadable',
         ];
     }
 
