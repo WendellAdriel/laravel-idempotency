@@ -252,6 +252,16 @@ test('same key with identical form-encoded payload replays', function (): void {
     expect($this->controllerExecutionCount)->toBe(1);
 });
 
+test('same key with different non UTF-8 form fields returns 422', function (): void {
+    $this->post('/orders', ['item' => "\xff"], ['Idempotency-Key' => 'key-1'])
+        ->assertOk();
+
+    $this->post('/orders', ['item' => "\xfe"], ['Idempotency-Key' => 'key-1'])
+        ->assertUnprocessable();
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
 test('same key with different uploaded file returns 422', function (): void {
     $this->post('/orders/upload', [
         'item' => 'widget',
@@ -277,6 +287,46 @@ test('same key with same-named same-sized but different file content returns 422
     $this->post('/orders/upload', [
         'item' => 'widget',
         'document' => UploadedFile::fake()->createWithContent('doc.txt', 'bbbb'),
+    ], ['Idempotency-Key' => 'key-1'])->assertUnprocessable();
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
+test('same key with different uploaded file mime type returns 422', function (): void {
+    $firstSource = UploadedFile::fake()->createWithContent('document.txt', 'same-bytes');
+    $firstFile = new UploadedFile($firstSource->getPathname(), 'document.txt', 'text/plain', null, true);
+
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'document' => $firstFile,
+    ], ['Idempotency-Key' => 'key-1'])->assertOk();
+
+    $secondSource = UploadedFile::fake()->createWithContent('document.txt', 'same-bytes');
+    $secondFile = new UploadedFile($secondSource->getPathname(), 'document.txt', 'application/octet-stream', null, true);
+
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'document' => $secondFile,
+    ], ['Idempotency-Key' => 'key-1'])->assertUnprocessable();
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
+test('same key with different uploaded file paths returns 422', function (): void {
+    $firstSource = UploadedFile::fake()->createWithContent('document.txt', 'same-bytes');
+    $firstFile = new UploadedFile($firstSource->getPathname(), 'first/document.txt', 'text/plain', null, true);
+
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'document' => $firstFile,
+    ], ['Idempotency-Key' => 'key-1'])->assertOk();
+
+    $secondSource = UploadedFile::fake()->createWithContent('document.txt', 'same-bytes');
+    $secondFile = new UploadedFile($secondSource->getPathname(), 'second/document.txt', 'text/plain', null, true);
+
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'document' => $secondFile,
     ], ['Idempotency-Key' => 'key-1'])->assertUnprocessable();
 
     expect($this->controllerExecutionCount)->toBe(1);

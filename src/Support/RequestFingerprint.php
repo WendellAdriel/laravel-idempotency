@@ -68,7 +68,7 @@ final class RequestFingerprint
         $fields = $request->request->all();
         $this->recursiveKeySort($fields);
 
-        return hash('xxh128', (string) json_encode([
+        return hash('xxh128', serialize([
             'fields' => $fields,
             'files' => $this->describeFiles($request->files->all()),
         ]));
@@ -96,13 +96,19 @@ final class RequestFingerprint
     }
 
     /**
-     * @return array{name: string, size: int|null, hash: string}
+     * @return array{name: string, path: string, mime_type: string, size: int|null, hash: string}
      */
     private function describeFile(UploadedFile $file): array
     {
+        $description = [
+            'name' => $file->getClientOriginalName(),
+            'path' => $file->getClientOriginalPath(),
+            'mime_type' => $file->getClientMimeType(),
+        ];
+
         if (! $file->isValid()) {
             return [
-                'name' => $file->getClientOriginalName(),
+                ...$description,
                 'size' => null,
                 'hash' => 'invalid:' . $file->getError(),
             ];
@@ -111,7 +117,7 @@ final class RequestFingerprint
         $hash = hash_file('xxh128', $file->getPathname());
 
         return [
-            'name' => $file->getClientOriginalName(),
+            ...$description,
             'size' => $file->getSize(),
             'hash' => $hash !== false ? $hash : 'unreadable',
         ];
