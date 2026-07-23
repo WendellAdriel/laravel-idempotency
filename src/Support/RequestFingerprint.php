@@ -6,6 +6,7 @@ namespace WendellAdriel\Idempotency\Support;
 
 use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
+use Symfony\Component\HttpFoundation\File\UploadedFile;
 
 final class RequestFingerprint
 {
@@ -55,7 +56,71 @@ final class RequestFingerprint
             }
         }
 
+        if ($request->request->count() > 0 || $request->files->count() > 0) {
+            return $this->hashFormPayload($request);
+        }
+
         return hash('xxh128', $request->getContent());
+    }
+
+    private function hashFormPayload(Request $request): string
+    {
+        $fields = $request->request->all();
+        $this->recursiveKeySort($fields);
+
+        return hash('xxh128', serialize([
+            'fields' => $fields,
+            'files' => $this->describeFiles($request->files->all()),
+        ]));
+    }
+
+    /**
+     * @param  array<int|string, mixed>  $files
+     * @return array<int|string, mixed>
+     */
+    private function describeFiles(array $files): array
+    {
+        $described = [];
+
+        foreach ($files as $key => $file) {
+            $described[$key] = match (true) {
+                $file instanceof UploadedFile => $this->describeFile($file),
+                is_array($file) => $this->describeFiles($file),
+                default => null,
+            };
+        }
+
+        ksort($described);
+
+        return $described;
+    }
+
+    /**
+     * @return array{name: string, path: string, mime_type: string, size: int|null, hash: string}
+     */
+    private function describeFile(UploadedFile $file): array
+    {
+        $description = [
+            'name' => $file->getClientOriginalName(),
+            'path' => $file->getClientOriginalPath(),
+            'mime_type' => $file->getClientMimeType(),
+        ];
+
+        if (! $file->isValid()) {
+            return [
+                ...$description,
+                'size' => null,
+                'hash' => 'invalid:' . $file->getError(),
+            ];
+        }
+
+        $hash = hash_file('xxh128', $file->getPathname());
+
+        return [
+            ...$description,
+            'size' => $file->getSize(),
+            'hash' => $hash !== false ? $hash : 'unreadable',
+        ];
     }
 
     /**

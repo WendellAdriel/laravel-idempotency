@@ -6,6 +6,7 @@ use Illuminate\Auth\GenericUser;
 use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Routing\Redirector;
 use Illuminate\Support\Facades\Route;
 use WendellAdriel\Idempotency\Enums\IdempotencyScope;
@@ -71,6 +72,12 @@ beforeEach(function (): void {
         })->middleware(Idempotent::class);
 
         Route::post('/refunds', fn () => response()->json(['type' => 'refund']))->middleware(Idempotent::class)->name('refunds.store');
+
+        Route::post('/orders/upload', function () {
+            test()->controllerExecutionCount++;
+
+            return response()->json(['id' => 1]);
+        })->middleware(Idempotent::class);
 
         Route::put('/orders', fn () => response()->json(['method' => 'put']))->middleware(Idempotent::class);
 
@@ -216,6 +223,205 @@ test('same key with different query string returns 422', function (): void {
 
     $this->postJson('/orders/query?source=mobile', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
         ->assertUnprocessable();
+});
+
+test('same key with different form-encoded payload returns 422', function (): void {
+    // Regression test: real form-urlencoded/multipart POST requests never
+    // reach RequestFingerprint::hashPayload() with a populated getContent(),
+    // because PHP's SAPI consumes the raw body into $_POST/$_FILES before
+    // Laravel sees it. $this->post() reproduces that same empty-content
+    // behaviour, unlike $this->postJson().
+    $this->post('/orders', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
+        ->assertOk();
+
+    $this->post('/orders', ['item' => 'different'], ['Idempotency-Key' => 'key-1'])
+        ->assertUnprocessable();
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
+test('same key with identical form-encoded payload replays', function (): void {
+    $this->post('/orders', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
+        ->assertOk()
+        ->assertHeaderMissing('Idempotency-Replayed');
+
+    $this->post('/orders', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
+        ->assertOk()
+        ->assertHeader('Idempotency-Replayed', 'true');
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
+test('same key with different non UTF-8 form fields returns 422', function (): void {
+    $this->post('/orders', ['item' => "\xff"], ['Idempotency-Key' => 'key-1'])
+        ->assertOk();
+
+    $this->post('/orders', ['item' => "\xfe"], ['Idempotency-Key' => 'key-1'])
+        ->assertUnprocessable();
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
+test('same key with different uploaded file returns 422', function (): void {
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'document' => UploadedFile::fake()->create('a.pdf', 10, 'application/pdf'),
+    ], ['Idempotency-Key' => 'key-1'])->assertOk();
+
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'document' => UploadedFile::fake()->create('b.pdf', 20, 'application/pdf'),
+    ], ['Idempotency-Key' => 'key-1'])->assertUnprocessable();
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
+test('same key with same-named same-sized but different file content returns 422', function (): void {
+    // Guards against a fix that only compares file name/size metadata
+    // instead of actual content.
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'document' => UploadedFile::fake()->createWithContent('doc.txt', 'aaaa'),
+    ], ['Idempotency-Key' => 'key-1'])->assertOk();
+
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'document' => UploadedFile::fake()->createWithContent('doc.txt', 'bbbb'),
+    ], ['Idempotency-Key' => 'key-1'])->assertUnprocessable();
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
+test('same key with different uploaded file mime type returns 422', function (): void {
+    $firstSource = UploadedFile::fake()->createWithContent('document.txt', 'same-bytes');
+    $firstFile = new UploadedFile($firstSource->getPathname(), 'document.txt', 'text/plain', null, true);
+
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'document' => $firstFile,
+    ], ['Idempotency-Key' => 'key-1'])->assertOk();
+
+    $secondSource = UploadedFile::fake()->createWithContent('document.txt', 'same-bytes');
+    $secondFile = new UploadedFile($secondSource->getPathname(), 'document.txt', 'application/octet-stream', null, true);
+
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'document' => $secondFile,
+    ], ['Idempotency-Key' => 'key-1'])->assertUnprocessable();
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
+test('same key with different uploaded file paths returns 422', function (): void {
+    $firstSource = UploadedFile::fake()->createWithContent('document.txt', 'same-bytes');
+    $firstFile = new UploadedFile($firstSource->getPathname(), 'first/document.txt', 'text/plain', null, true);
+
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'document' => $firstFile,
+    ], ['Idempotency-Key' => 'key-1'])->assertOk();
+
+    $secondSource = UploadedFile::fake()->createWithContent('document.txt', 'same-bytes');
+    $secondFile = new UploadedFile($secondSource->getPathname(), 'second/document.txt', 'text/plain', null, true);
+
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'document' => $secondFile,
+    ], ['Idempotency-Key' => 'key-1'])->assertUnprocessable();
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
+test('same key with identical uploaded file replays', function (): void {
+    $makeFile = fn (): UploadedFile => UploadedFile::fake()->createWithContent('doc.txt', 'same-bytes');
+
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'document' => $makeFile(),
+    ], ['Idempotency-Key' => 'key-1'])
+        ->assertOk()
+        ->assertHeaderMissing('Idempotency-Replayed');
+
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'document' => $makeFile(),
+    ], ['Idempotency-Key' => 'key-1'])
+        ->assertOk()
+        ->assertHeader('Idempotency-Replayed', 'true');
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
+test('same key with different files in an array-of-files field returns 422', function (): void {
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'photos' => [
+            UploadedFile::fake()->createWithContent('one.jpg', 'photo-one'),
+            UploadedFile::fake()->createWithContent('two.jpg', 'photo-two'),
+        ],
+    ], ['Idempotency-Key' => 'key-1'])->assertOk();
+
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'photos' => [
+            UploadedFile::fake()->createWithContent('one.jpg', 'photo-one'),
+            UploadedFile::fake()->createWithContent('two.jpg', 'DIFFERENT'),
+        ],
+    ], ['Idempotency-Key' => 'key-1'])->assertUnprocessable();
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
+test('same key with identical files in an array-of-files field replays', function (): void {
+    $makePhotos = fn (): array => [
+        UploadedFile::fake()->createWithContent('one.jpg', 'photo-one'),
+        UploadedFile::fake()->createWithContent('two.jpg', 'photo-two'),
+    ];
+
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'photos' => $makePhotos(),
+    ], ['Idempotency-Key' => 'key-1'])
+        ->assertOk()
+        ->assertHeaderMissing('Idempotency-Replayed');
+
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'photos' => $makePhotos(),
+    ], ['Idempotency-Key' => 'key-1'])
+        ->assertOk()
+        ->assertHeader('Idempotency-Replayed', 'true');
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
+test('same key with differently failed uploads is not treated as an identical payload', function (): void {
+    // Two failed uploads must not collapse to the same fingerprint just
+    // because neither has readable content - they can fail for different
+    // reasons and are not necessarily "the same request".
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'document' => new UploadedFile(
+            sys_get_temp_dir() . '/does-not-matter',
+            'a.pdf',
+            'application/pdf',
+            UPLOAD_ERR_INI_SIZE,
+            true,
+        ),
+    ], ['Idempotency-Key' => 'key-1'])->assertOk();
+
+    $this->post('/orders/upload', [
+        'item' => 'widget',
+        'document' => new UploadedFile(
+            sys_get_temp_dir() . '/does-not-matter',
+            'a.pdf',
+            'application/pdf',
+            UPLOAD_ERR_FORM_SIZE,
+            true,
+        ),
+    ], ['Idempotency-Key' => 'key-1'])->assertUnprocessable();
+
+    expect($this->controllerExecutionCount)->toBe(1);
 });
 
 test('same key on different route does not collide', function (): void {
