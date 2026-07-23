@@ -51,7 +51,7 @@ The `@idempotency` directive renders the configured hidden input with a new key 
 @idempotency($idempotencyKey)
 ```
 
-Reuse the same value when retrying the same submission. See [generating keys](generating-keys.md) for more information about application-generated keys.
+Reuse the same value when retrying the same submission. Form fields and uploaded file metadata and contents must also match the original request. If they differ, the package returns `422 Unprocessable Entity` instead of replaying the stored response. See [generating keys](generating-keys.md) for more information about application-generated keys.
 
 The configured header takes precedence when both sources contain a non-empty string. To use a different request input name, set `IDEMPOTENCY_INPUT` in your environment file:
 
