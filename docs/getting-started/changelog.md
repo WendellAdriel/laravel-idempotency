@@ -2,6 +2,10 @@
 
 Here's a quick overview of the new features in the latest major versions of the package.
 
+## 1.4.0
+
+* Added a `cache_statuses` option that selects which response classes (`informational`, `success`, `redirection`, `client_error`, `server_error`) are stored, so a failed request can leave the idempotency key free for a retry. Configurable through the config file, route middleware options, and controller attribute options.
+
 ## 1.3.1
 
 * Fixed request fingerprints for form and multipart submissions so changed fields, uploaded file metadata, and file contents return `422 Unprocessable Entity` instead of replaying a stored response.

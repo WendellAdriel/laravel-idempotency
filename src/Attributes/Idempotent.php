@@ -15,6 +15,7 @@ final class Idempotent extends Middleware
     /**
      * @param  array<string>|null  $only
      * @param  array<string>|null  $except
+     * @param  array<string, bool>|null  $cacheStatuses
      */
     public function __construct(
         ?int $ttl = null,
@@ -24,6 +25,7 @@ final class Idempotent extends Middleware
         ?int $lockTimeout = null,
         ?array $only = null,
         ?array $except = null,
+        ?array $cacheStatuses = null,
     ) {
         parent::__construct(
             IdempotentMiddleware::using(
@@ -32,6 +34,7 @@ final class Idempotent extends Middleware
                 scope: $scope,
                 header: $header,
                 lockTimeout: $lockTimeout,
+                cacheStatuses: $cacheStatuses,
             ),
             $only,
             $except,

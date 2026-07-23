@@ -75,9 +75,12 @@ Route::post('/payments', ChargePaymentController::class)->middleware(
         scope: IdempotencyScope::Ip,
         header: 'X-Idempotency-Key',
         lockTimeout: 30,
+        cacheStatuses: ['client_error' => false],
     )
 );
 ```
+
+The `cacheStatuses` option controls which response classes are stored - `informational`, `success`, `redirection`, `client_error`, and `server_error`. All are enabled by default; disabling one leaves the key free for a retry instead of replaying a stored failure.
 
 You may also use the `idempotent` middleware alias:
 

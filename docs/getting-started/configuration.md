@@ -6,6 +6,7 @@
 - [Scope](#scope)
 - [Header name](#header-name)
 - [Request input name](#request-input-name)
+- [Cache statuses](#cache-statuses)
 - [Lock timeout](#lock-timeout)
 
 ## Introduction
@@ -16,7 +17,7 @@ Laravel Idempotency stores its application-level options in `config/idempotency.
 php artisan vendor:publish --tag="idempotency-config"
 ```
 
-The default configuration is intentionally small. It controls stored response lifetime, key input behavior, scope resolution, and the in-flight lock timeout.
+The default configuration is intentionally small. It controls stored response lifetime, key input behavior, scope resolution, which responses are stored, and the in-flight lock timeout.
 
 ```php
 return [
@@ -25,6 +26,13 @@ return [
     'scope' => env('IDEMPOTENCY_SCOPE', IdempotencyScope::User->value),
     'header' => env('IDEMPOTENCY_HEADER', 'Idempotency-Key'),
     'input' => env('IDEMPOTENCY_INPUT', '_idempotency_key'),
+    'cache_statuses' => [
+        'informational' => true,
+        'success' => true,
+        'redirection' => true,
+        'client_error' => true,
+        'server_error' => true,
+    ],
     'lock_timeout' => env('IDEMPOTENCY_LOCK_TIMEOUT', 10),
 ];
 ```
@@ -80,6 +88,53 @@ The `input` option defines which request input is inspected when the configured 
 ```
 
 The default works with a hidden form input named `_idempotency_key`. To use `_request_key` instead, set `IDEMPOTENCY_INPUT=_request_key`. The header always takes precedence when both sources contain valid keys.
+
+## Cache statuses
+
+The `cache_statuses` option determines which response classes are stored under an idempotency key:
+
+```php
+'cache_statuses' => [
+    'informational' => true,
+    'success' => true,
+    'redirection' => true,
+    'client_error' => true,
+    'server_error' => true,
+],
+```
+
+Each key maps to an HTTP status range:
+
+| Class | Status codes |
+| --- | --- |
+| `informational` | `1xx` |
+| `success` | `2xx` |
+| `redirection` | `3xx` |
+| `client_error` | `4xx` |
+| `server_error` | `5xx` |
+
+Every class is enabled by default, which stores every response. Disabling a class leaves the key untouched for those responses: the client may retry with the same key and the route is executed again. Nothing is written to the [key index](../operations/maintenance-commands.md) for a response that is not stored.
+
+A request that fails validation otherwise occupies its key for the whole TTL. Resubmitting the corrected payload with the same key returns `422 Unprocessable Entity`, because the request data no longer matches the stored fingerprint, even though the operation never happened. Disable `client_error` to free the key for those retries:
+
+```php
+'cache_statuses' => [
+    'client_error' => false,
+    'server_error' => false,
+],
+```
+
+Classes you leave out stay enabled, so the map above still caches `1xx`, `2xx`, and `3xx` responses. Keep `redirection` enabled when you rely on the [request input](../basics/usage.md#request-input) flow, since a successful form submission usually answers with `302 Found`.
+
+You may also set the classes per route or per controller with the `cacheStatuses` option:
+
+```php
+Route::post('/orders', StoreOrderController::class)->middleware(
+    Idempotent::using(cacheStatuses: ['client_error' => false])
+);
+```
+
+An unknown class name throws an `InvalidArgumentException` when options are resolved, so a typo fails fast instead of silently caching everything.
 
 ## Lock timeout
 
