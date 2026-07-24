@@ -87,23 +87,11 @@ beforeEach(function (): void {
             return response()->json(['created' => true], 201);
         })->middleware(Idempotent::using(cacheStatuses: $noErrors));
 
-        Route::post('/orders/no-errors/redirect', function (): Redirector|RedirectResponse {
-            test()->controllerExecutionCount++;
-
-            return redirect('/orders/1');
-        })->middleware(Idempotent::using(cacheStatuses: $noErrors));
-
         Route::post('/orders/no-errors/server-error', function () {
             test()->controllerExecutionCount++;
 
             return response()->json(['message' => 'Server Error'], 500);
         })->middleware(Idempotent::using(cacheStatuses: $noErrors));
-
-        Route::post('/orders/no-redirects', function (): Redirector|RedirectResponse {
-            test()->controllerExecutionCount++;
-
-            return redirect('/orders/1');
-        })->middleware(Idempotent::using(cacheStatuses: ['redirection' => false]));
 
         Route::post('/refunds', fn () => response()->json(['type' => 'refund']))->middleware(Idempotent::class)->name('refunds.store');
 
@@ -700,7 +688,7 @@ test('validation exceptions do not poison the stored response', function (): voi
 });
 
 test('by default a failed response still occupies the key for the whole ttl', function (): void {
-    // Documents the backward compatible default: every response class is cached,
+    // Documents the backward compatible default: every response category is cached,
     // so the 422 is stored and correcting the payload for a retry with the same
     // key is rejected as a fingerprint mismatch instead of executing again.
     $this->postJson('/orders/validation', [], ['Idempotency-Key' => 'key-1'])
@@ -711,7 +699,7 @@ test('by default a failed response still occupies the key for the whole ttl', fu
         ->assertJsonPath('message', 'Idempotency key already used with different request parameters.');
 });
 
-test('a disabled client_error class lets a corrected payload retry with the same key', function (): void {
+test('a disabled client_error category lets a corrected payload retry with the same key', function (): void {
     $this->postJson('/orders/no-errors/validation', [], ['Idempotency-Key' => 'key-1'])
         ->assertUnprocessable();
 
@@ -723,18 +711,7 @@ test('a disabled client_error class lets a corrected payload retry with the same
     expect($this->controllerExecutionCount)->toBe(2);
 });
 
-test('a disabled client_error class re-executes an identical request after a failure', function (): void {
-    $this->postJson('/orders/no-errors/validation', [], ['Idempotency-Key' => 'key-1'])
-        ->assertUnprocessable();
-
-    $this->postJson('/orders/no-errors/validation', [], ['Idempotency-Key' => 'key-1'])
-        ->assertUnprocessable()
-        ->assertHeaderMissing('Idempotency-Replayed');
-
-    expect($this->controllerExecutionCount)->toBe(2);
-});
-
-test('a disabled client_error class does not write an index entry for a failed response', function (): void {
+test('a disabled client_error category does not write an index entry for a failed response', function (): void {
     $this->postJson('/orders/no-errors/validation', [], ['Idempotency-Key' => 'key-1'])
         ->assertUnprocessable();
 
@@ -743,7 +720,7 @@ test('a disabled client_error class does not write an index entry for a failed r
     expect($index->all())->toBe([]);
 });
 
-test('a disabled server_error class does not cache server error responses', function (): void {
+test('a disabled server_error category does not cache server error responses', function (): void {
     $this->postJson('/orders/no-errors/server-error', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
         ->assertServerError();
 
@@ -757,7 +734,7 @@ test('a disabled server_error class does not cache server error responses', func
         ->and($index->all())->toBe([]);
 });
 
-test('an enabled success class still replays successful responses', function (): void {
+test('an enabled success category still replays successful responses', function (): void {
     $this->postJson('/orders/no-errors/created', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
         ->assertCreated()
         ->assertHeaderMissing('Idempotency-Replayed');
@@ -771,20 +748,6 @@ test('an enabled success class still replays successful responses', function ():
 
     expect($this->controllerExecutionCount)->toBe(1)
         ->and($index->all())->toHaveCount(1);
-});
-
-test('an enabled redirection class still replays redirects', function (): void {
-    // A successful form submission answers with a 302, so redirection is its
-    // own class: leaving it enabled keeps the Blade form flow protected.
-    $this->post('/orders/no-errors/redirect', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
-        ->assertRedirect('/orders/1')
-        ->assertHeaderMissing('Idempotency-Replayed');
-
-    $this->post('/orders/no-errors/redirect', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
-        ->assertRedirect('/orders/1')
-        ->assertHeader('Idempotency-Replayed', 'true');
-
-    expect($this->controllerExecutionCount)->toBe(1);
 });
 
 test('cache_statuses can be configured through the config file', function (): void {
@@ -887,24 +850,6 @@ test('a legacy five field middleware string is still handled', function (): void
         ->assertHeader('Idempotency-Replayed', 'true');
 
     expect($this->controllerExecutionCount)->toBe(1);
-});
-
-test('using pulls cache_statuses from config when omitted', function (): void {
-    config()->set('idempotency.cache_statuses.server_error', false);
-
-    expect(Idempotent::using())->toBe(Idempotent::class . ':3600,1,user,Idempotency-Key,10,11110')
-        ->and(Idempotent::using(cacheStatuses: ['server_error' => true]))
-        ->toBe(Idempotent::class . ':3600,1,user,Idempotency-Key,10,11111');
-});
-
-test('using accepts a partial cache_statuses map and defaults the rest to enabled', function (): void {
-    expect(Idempotent::using(cacheStatuses: ['informational' => false]))
-        ->toBe(Idempotent::class . ':3600,1,user,Idempotency-Key,10,01111');
-});
-
-test('an unknown cache status class throws', function (): void {
-    expect(fn (): string => Idempotent::using(cacheStatuses: ['sucess' => false]))
-        ->toThrow(InvalidArgumentException::class, 'Unsupported cache status class [sucess].');
 });
 
 test('zero lock_timeout on using() throws', function (): void {

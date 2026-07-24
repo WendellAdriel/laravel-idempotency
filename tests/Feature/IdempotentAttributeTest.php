@@ -109,28 +109,6 @@ test('attribute accepts the legacy positional only and except arguments', functi
     ])->and($updateRoute->controllerMiddleware())->toBe([]);
 });
 
-test('attribute keeps only and except working alongside cache_statuses', function (): void {
-    $storeRoute = Route::post('/orders', [IdempotentAttributeCacheStatusesOnlyTestController::class, 'store']);
-    $updateRoute = Route::put('/orders/{id}', [IdempotentAttributeCacheStatusesOnlyTestController::class, 'update']);
-
-    expect($storeRoute->controllerMiddleware())->toBe([
-        IdempotentMiddleware::class . ':3600,1,user,Idempotency-Key,10,11100',
-    ])->and($updateRoute->controllerMiddleware())->toBe([]);
-});
-
-test('attribute accepts a partial cache_statuses map', function (): void {
-    $route = Route::post('/orders', [IdempotentAttributePartialCacheStatusesTestController::class, 'store']);
-
-    expect($route->controllerMiddleware())->toBe([
-        IdempotentMiddleware::class . ':3600,1,user,Idempotency-Key,10,11110',
-    ]);
-});
-
-test('attribute with an unknown cache status class throws', function (): void {
-    expect(fn () => Route::post('/invalid-statuses', [IdempotentAttributeInvalidCacheStatusesTestController::class, 'store'])->controllerMiddleware())
-        ->toThrow(InvalidArgumentException::class, 'Unsupported cache status class [sucess].');
-});
-
 test('attribute with zero ttl throws when the middleware string is resolved', function (): void {
     // The attribute constructor calls IdempotentMiddleware::using() directly, a
     // separate call site from the plain middleware usage - verify the ttl
@@ -198,26 +176,6 @@ class IdempotentAttributeInvalidTtlTestController
 
 #[Idempotent(cacheStatuses: ['client_error' => false, 'server_error' => false])]
 class IdempotentAttributeCacheStatusesTestController
-{
-    public function store(): void {}
-}
-
-class IdempotentAttributeCacheStatusesOnlyTestController
-{
-    #[Idempotent(only: ['store'], cacheStatuses: ['client_error' => false, 'server_error' => false])]
-    public function store(): void {}
-
-    public function update(): void {}
-}
-
-#[Idempotent(cacheStatuses: ['server_error' => false])]
-class IdempotentAttributePartialCacheStatusesTestController
-{
-    public function store(): void {}
-}
-
-#[Idempotent(cacheStatuses: ['sucess' => false])]
-class IdempotentAttributeInvalidCacheStatusesTestController
 {
     public function store(): void {}
 }

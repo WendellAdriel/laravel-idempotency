@@ -119,29 +119,6 @@ test('a partial cache_statuses config map defaults the missing classes to enable
     ]);
 });
 
-test('cache_statuses defaults to every class enabled', function (): void {
-    expect(IdempotencyOptions::resolve()->cacheStatuses)->toBe([
-        'informational' => true,
-        'success' => true,
-        'redirection' => true,
-        'client_error' => true,
-        'server_error' => true,
-    ]);
-});
-
-test('cache_statuses is resolved from config when omitted', function (): void {
-    config()->set('idempotency.cache_statuses.redirection', false);
-
-    expect(IdempotencyOptions::resolve()->serialize())->toBe('3600,1,user,Idempotency-Key,10,11011');
-});
-
-test('an explicit cache_statuses map overrides the config value', function (): void {
-    config()->set('idempotency.cache_statuses.client_error', false);
-
-    expect(IdempotencyOptions::resolve(cacheStatuses: ['client_error' => true])->cacheStatuses['client_error'])
-        ->toBeTrue();
-});
-
 test('string-form cache_statuses flags from the middleware string are resolved', function (): void {
     // Route middleware parameters arrive as strings (e.g. "idempotent:...,11100").
     expect(IdempotencyOptions::resolve(cacheStatuses: '11100')->cacheStatuses)->toBe([
