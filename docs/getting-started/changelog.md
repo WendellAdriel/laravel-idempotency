@@ -4,7 +4,7 @@ Here's a quick overview of the new features in the latest major versions of the 
 
 ## 1.4.0
 
-* Added a `cache_statuses` option that selects which response classes (`informational`, `success`, `redirection`, `client_error`, `server_error`) are stored, so a failed request can leave the idempotency key free for a retry. Configurable through the config file, route middleware options, and controller attribute options.
+* Added configurable cache statuses for stored responses through the config file, route middleware options, and controller attributes.
 
 ## 1.3.1
 
