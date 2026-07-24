@@ -60,6 +60,24 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Idempotency Cache Statuses
+    |--------------------------------------------------------------------------
+    |
+    | Here you may define which response categories are stored for a request key.
+    | All categories are enabled by default. Disable one so clients may retry
+    | rather than replaying a stored response after the request failed.
+    |
+    */
+    'cache_statuses' => [
+        'informational' => true,
+        'success' => true,
+        'redirection' => true,
+        'client_error' => true,
+        'server_error' => true,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Idempotency Lock Timeout
     |--------------------------------------------------------------------------
     |

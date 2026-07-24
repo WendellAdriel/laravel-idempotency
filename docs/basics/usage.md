@@ -74,11 +74,14 @@ Route::post('/payments', ChargePaymentController::class)->middleware(
         scope: IdempotencyScope::Ip,
         header: 'X-Idempotency-Key',
         lockTimeout: 30,
+        cacheStatuses: ['client_error' => false],
     )
 );
 ```
 
 The route-level options are serialized into the middleware string and override the package configuration for that route only.
+
+The `cacheStatuses` option controls which response categories are stored. Categories you leave out stay enabled, so the example above caches everything except `4xx` responses: a failed request leaves the key free and the client may retry with the same key instead of being blocked by a cached error for the rest of the TTL. See [cache statuses](../getting-started/configuration.md#cache-statuses) for the full list of categories.
 
 ## Middleware alias
 
@@ -92,7 +95,7 @@ The alias uses the configured `idempotency.header` and `idempotency.input` value
 
 ## Controller attribute
 
-If you prefer attributes, use the package's `#[Idempotent]` attribute. The attribute applies the same middleware and accepts the same `ttl`, `required`, `scope`, `header`, and `lockTimeout` options.
+If you prefer attributes, use the package's `#[Idempotent]` attribute. The attribute applies the same middleware and accepts the same `ttl`, `required`, `scope`, `header`, `lockTimeout`, and `cacheStatuses` options.
 
 ```php
 namespace App\Http\Controllers;
@@ -121,7 +124,7 @@ use WendellAdriel\Idempotency\Enums\IdempotencyScope;
 #[Idempotent]
 class PaymentController
 {
-    #[Idempotent(ttl: 600, scope: IdempotencyScope::Ip, header: 'X-Idempotency-Key', lockTimeout: 30)]
+    #[Idempotent(ttl: 600, scope: IdempotencyScope::Ip, header: 'X-Idempotency-Key', lockTimeout: 30, cacheStatuses: ['client_error' => false])]
     public function store()
     {
         // ...
@@ -149,3 +152,5 @@ class OrderController
 Clients should reuse the same idempotency key in the configured header or request input when retrying the same submission. If a frontend receives or generates a fresh key after every successful request, each request is treated as a new operation and appears as a separate row in `idempotency:list`.
 
 If the same key is reused with different request data, the package returns `422 Unprocessable Entity`. If a second matching request arrives while the first request is still being processed, the package returns `409 Conflict` with `Retry-After: 1`.
+
+By default an error response is stored like any other, so a key that was used for a failed attempt cannot be reused with corrected data. Disable the `client_error` and `server_error` [cache statuses](../getting-started/configuration.md#cache-statuses) when clients keep a stable key per form or operation and should be able to retry after a failure.

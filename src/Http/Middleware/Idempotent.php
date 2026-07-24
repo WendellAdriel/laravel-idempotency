@@ -13,6 +13,7 @@ use Illuminate\Support\Carbon;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use WendellAdriel\Idempotency\Enums\IdempotencyScope;
+use WendellAdriel\Idempotency\Enums\ResponseCategory;
 use WendellAdriel\Idempotency\Support\IdempotencyCache;
 use WendellAdriel\Idempotency\Support\IdempotencyIndex;
 use WendellAdriel\Idempotency\Support\IdempotencyOptions;
@@ -31,12 +32,16 @@ final readonly class Idempotent
         private RequestFingerprint $fingerprint,
     ) {}
 
+    /**
+     * @param  array<string, bool>|null  $cacheStatuses
+     */
     public static function using(
         ?int $ttl = null,
         ?bool $required = null,
         ?IdempotencyScope $scope = null,
         ?string $header = null,
         ?int $lockTimeout = null,
+        ?array $cacheStatuses = null,
     ): string {
         return self::class . ':' . IdempotencyOptions::resolve(
             ttl: $ttl,
@@ -44,9 +49,13 @@ final readonly class Idempotent
             scope: $scope,
             header: $header,
             lockTimeout: $lockTimeout,
+            cacheStatuses: $cacheStatuses,
         )->serialize();
     }
 
+    /**
+     * @param  array<string, bool>|string|null  $cacheStatuses
+     */
     public function handle(
         Request $request,
         Closure $next,
@@ -55,6 +64,7 @@ final readonly class Idempotent
         null|string|IdempotencyScope $scope = null,
         ?string $header = null,
         null|int|string $lockTimeout = null,
+        null|array|string $cacheStatuses = null,
     ): SymfonyResponse {
         if (! $this->isIdempotentMethod($request)) {
             return $next($request);
@@ -66,6 +76,7 @@ final readonly class Idempotent
             scope: $scope,
             header: $header,
             lockTimeout: $lockTimeout,
+            cacheStatuses: $cacheStatuses,
         );
         $clientKey = $request->header($options->header);
 
@@ -116,6 +127,10 @@ final readonly class Idempotent
             /** @var SymfonyResponse $response */
             $response = $next($request);
 
+            if (! $this->shouldCache($response, $options)) {
+                return $response;
+            }
+
             $this->idempotencyCache->put(
                 $storageKey,
                 $this->idempotencyCache->serializeResponse($response, $fingerprint),
@@ -139,6 +154,12 @@ final readonly class Idempotent
         } finally {
             $lock->release();
         }
+    }
+
+    private function shouldCache(SymfonyResponse $response, IdempotencyOptions $options): bool
+    {
+        return ResponseCategory::fromStatusCode($response->getStatusCode())
+            ->isEnabledIn($options->cacheStatuses);
     }
 
     private function isIdempotentMethod(Request $request): bool

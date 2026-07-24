@@ -11,7 +11,7 @@ test('attribute expands to the expected middleware string using config defaults'
     $route = Route::post('/orders', [IdempotentAttributeTestController::class, 'store']);
 
     expect($route->controllerMiddleware())->toBe([
-        IdempotentMiddleware::class . ':3600,1,user,Idempotency-Key,10',
+        IdempotentMiddleware::class . ':3600,1,user,Idempotency-Key,10,11111',
     ]);
 });
 
@@ -19,7 +19,7 @@ test('attribute passes custom options', function (): void {
     $route = Route::post('/orders', [IdempotentAttributeCustomTestController::class, 'store']);
 
     expect($route->controllerMiddleware())->toBe([
-        IdempotentMiddleware::class . ':600,0,ip,X-Idempotency-Key,10',
+        IdempotentMiddleware::class . ':600,0,ip,X-Idempotency-Key,10,11111',
     ]);
 });
 
@@ -28,9 +28,9 @@ test('class level attribute applies to all methods', function (): void {
     $updateRoute = Route::put('/orders/{id}', [IdempotentAttributeClassLevelTestController::class, 'update']);
 
     expect($storeRoute->controllerMiddleware())->toBe([
-        IdempotentMiddleware::class . ':3600,1,user,Idempotency-Key,10',
+        IdempotentMiddleware::class . ':3600,1,user,Idempotency-Key,10,11111',
     ])->and($updateRoute->controllerMiddleware())->toBe([
-        IdempotentMiddleware::class . ':3600,1,user,Idempotency-Key,10',
+        IdempotentMiddleware::class . ':3600,1,user,Idempotency-Key,10,11111',
     ]);
 });
 
@@ -39,10 +39,10 @@ test('method level attribute stacks with class level', function (): void {
     $updateRoute = Route::put('/orders/{id}', [IdempotentAttributeMethodOverrideTestController::class, 'update']);
 
     expect($storeRoute->controllerMiddleware())->toBe([
-        IdempotentMiddleware::class . ':3600,1,user,Idempotency-Key,10',
-        IdempotentMiddleware::class . ':600,1,ip,X-Idempotency-Key,10',
+        IdempotentMiddleware::class . ':3600,1,user,Idempotency-Key,10,11111',
+        IdempotentMiddleware::class . ':600,1,ip,X-Idempotency-Key,10,11111',
     ])->and($updateRoute->controllerMiddleware())->toBe([
-        IdempotentMiddleware::class . ':3600,1,user,Idempotency-Key,10',
+        IdempotentMiddleware::class . ':3600,1,user,Idempotency-Key,10,11111',
     ]);
 });
 
@@ -51,7 +51,7 @@ test('only option filters methods', function (): void {
     $updateRoute = Route::put('/orders/{id}', [IdempotentAttributeOnlyTestController::class, 'update']);
 
     expect($storeRoute->controllerMiddleware())->toBe([
-        IdempotentMiddleware::class . ':3600,1,user,Idempotency-Key,10',
+        IdempotentMiddleware::class . ':3600,1,user,Idempotency-Key,10,11111',
     ])->and($updateRoute->controllerMiddleware())->toBe([]);
 });
 
@@ -61,7 +61,7 @@ test('except option filters methods', function (): void {
 
     expect($storeRoute->controllerMiddleware())->toBe([])
         ->and($updateRoute->controllerMiddleware())->toBe([
-            IdempotentMiddleware::class . ':3600,1,user,Idempotency-Key,10',
+            IdempotentMiddleware::class . ':3600,1,user,Idempotency-Key,10,11111',
         ]);
 });
 
@@ -74,7 +74,7 @@ test('attribute omissions pull defaults from config', function (): void {
     $route = Route::post('/config-orders', [IdempotentAttributeTestController::class, 'store']);
 
     expect($route->controllerMiddleware())->toBe([
-        IdempotentMiddleware::class . ':120,0,global,X-Config-Idempotency-Key,10',
+        IdempotentMiddleware::class . ':120,0,global,X-Config-Idempotency-Key,10,11111',
     ]);
 });
 
@@ -85,8 +85,28 @@ test('attribute accepts the legacy positional argument order', function (): void
     $route = Route::post('/positional-orders', [IdempotentAttributePositionalTestController::class, 'store']);
 
     expect($route->controllerMiddleware())->toBe([
-        IdempotentMiddleware::class . ':600,0,ip,X-Idempotency-Key,10',
+        IdempotentMiddleware::class . ':600,0,ip,X-Idempotency-Key,10,11111',
     ]);
+});
+
+test('attribute passes cache_statuses', function (): void {
+    $route = Route::post('/orders', [IdempotentAttributeCacheStatusesTestController::class, 'store']);
+
+    expect($route->controllerMiddleware())->toBe([
+        IdempotentMiddleware::class . ':3600,1,user,Idempotency-Key,10,11100',
+    ]);
+});
+
+test('attribute accepts the legacy positional only and except arguments', function (): void {
+    // Regression: cacheStatuses must be appended after only/except, or a
+    // positional #[Idempotent(600, false, $scope, $header, 30, ['store'])] binds
+    // the method list to the new parameter instead of to only.
+    $storeRoute = Route::post('/orders', [IdempotentAttributePositionalOnlyTestController::class, 'store']);
+    $updateRoute = Route::put('/orders/{id}', [IdempotentAttributePositionalOnlyTestController::class, 'update']);
+
+    expect($storeRoute->controllerMiddleware())->toBe([
+        IdempotentMiddleware::class . ':600,0,ip,X-Idempotency-Key,30,11111',
+    ])->and($updateRoute->controllerMiddleware())->toBe([]);
 });
 
 test('attribute with zero ttl throws when the middleware string is resolved', function (): void {
@@ -152,4 +172,18 @@ class IdempotentAttributePositionalTestController
 class IdempotentAttributeInvalidTtlTestController
 {
     public function store(): void {}
+}
+
+#[Idempotent(cacheStatuses: ['client_error' => false, 'server_error' => false])]
+class IdempotentAttributeCacheStatusesTestController
+{
+    public function store(): void {}
+}
+
+class IdempotentAttributePositionalOnlyTestController
+{
+    #[Idempotent(600, false, IdempotencyScope::Ip, 'X-Idempotency-Key', 30, ['store'])]
+    public function store(): void {}
+
+    public function update(): void {}
 }

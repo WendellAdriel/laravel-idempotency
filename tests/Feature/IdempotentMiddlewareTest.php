@@ -14,7 +14,9 @@ use WendellAdriel\Idempotency\Http\Middleware\Idempotent;
 use WendellAdriel\Idempotency\Support\IdempotencyIndex;
 
 beforeEach(function (): void {
-    Route::middleware('web')->group(function (): void {
+    $noErrors = ['client_error' => false, 'server_error' => false];
+
+    Route::middleware('web')->group(function () use ($noErrors): void {
         Route::post('/orders', function () {
             test()->controllerExecutionCount++;
 
@@ -70,6 +72,26 @@ beforeEach(function (): void {
 
             return response()->json(['id' => 1]);
         })->middleware(Idempotent::class);
+
+        Route::post('/orders/no-errors/validation', function (Request $request) {
+            test()->controllerExecutionCount++;
+
+            $request->validate(['item' => 'required']);
+
+            return response()->json(['id' => 1]);
+        })->middleware(Idempotent::using(cacheStatuses: $noErrors))->name('no-errors.validation');
+
+        Route::post('/orders/no-errors/created', function () {
+            test()->controllerExecutionCount++;
+
+            return response()->json(['created' => true], 201);
+        })->middleware(Idempotent::using(cacheStatuses: $noErrors));
+
+        Route::post('/orders/no-errors/server-error', function () {
+            test()->controllerExecutionCount++;
+
+            return response()->json(['message' => 'Server Error'], 500);
+        })->middleware(Idempotent::using(cacheStatuses: $noErrors));
 
         Route::post('/refunds', fn () => response()->json(['type' => 'refund']))->middleware(Idempotent::class)->name('refunds.store');
 
@@ -665,6 +687,115 @@ test('validation exceptions do not poison the stored response', function (): voi
         ->assertJson(['id' => 1]);
 });
 
+test('by default a failed response still occupies the key for the whole ttl', function (): void {
+    // Documents the backward compatible default: every response category is cached,
+    // so the 422 is stored and correcting the payload for a retry with the same
+    // key is rejected as a fingerprint mismatch instead of executing again.
+    $this->postJson('/orders/validation', [], ['Idempotency-Key' => 'key-1'])
+        ->assertUnprocessable();
+
+    $this->postJson('/orders/validation', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
+        ->assertUnprocessable()
+        ->assertJsonPath('message', 'Idempotency key already used with different request parameters.');
+});
+
+test('a disabled client_error category lets a corrected payload retry with the same key', function (): void {
+    $this->postJson('/orders/no-errors/validation', [], ['Idempotency-Key' => 'key-1'])
+        ->assertUnprocessable();
+
+    $this->postJson('/orders/no-errors/validation', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
+        ->assertOk()
+        ->assertJson(['id' => 1])
+        ->assertHeaderMissing('Idempotency-Replayed');
+
+    expect($this->controllerExecutionCount)->toBe(2);
+});
+
+test('a disabled client_error category does not write an index entry for a failed response', function (): void {
+    $this->postJson('/orders/no-errors/validation', [], ['Idempotency-Key' => 'key-1'])
+        ->assertUnprocessable();
+
+    $index = $this->app->make(IdempotencyIndex::class);
+
+    expect($index->all())->toBe([]);
+});
+
+test('a disabled server_error category does not cache server error responses', function (): void {
+    $this->postJson('/orders/no-errors/server-error', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
+        ->assertServerError();
+
+    $this->postJson('/orders/no-errors/server-error', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
+        ->assertServerError()
+        ->assertHeaderMissing('Idempotency-Replayed');
+
+    $index = $this->app->make(IdempotencyIndex::class);
+
+    expect($this->controllerExecutionCount)->toBe(2)
+        ->and($index->all())->toBe([]);
+});
+
+test('an enabled success category still replays successful responses', function (): void {
+    $this->postJson('/orders/no-errors/created', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
+        ->assertCreated()
+        ->assertHeaderMissing('Idempotency-Replayed');
+
+    $this->postJson('/orders/no-errors/created', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
+        ->assertCreated()
+        ->assertJson(['created' => true])
+        ->assertHeader('Idempotency-Replayed', 'true');
+
+    $index = $this->app->make(IdempotencyIndex::class);
+
+    expect($this->controllerExecutionCount)->toBe(1)
+        ->and($index->all())->toHaveCount(1);
+});
+
+test('cache_statuses can be configured through the config file', function (): void {
+    config()->set('idempotency.cache_statuses.client_error', false);
+
+    Route::middleware('web')->group(function (): void {
+        Route::post('/orders/config-cache-statuses', function (Request $request) {
+            test()->controllerExecutionCount++;
+
+            $request->validate(['item' => 'required']);
+
+            return response()->json(['id' => 1]);
+        })->middleware(Idempotent::class);
+    });
+
+    $this->postJson('/orders/config-cache-statuses', [], ['Idempotency-Key' => 'key-1'])
+        ->assertUnprocessable();
+
+    $this->postJson('/orders/config-cache-statuses', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
+        ->assertOk()
+        ->assertJson(['id' => 1]);
+
+    expect($this->controllerExecutionCount)->toBe(2);
+});
+
+test('a route option overrides the cache_statuses config value', function (): void {
+    config()->set('idempotency.cache_statuses.client_error', false);
+
+    Route::middleware('web')->group(function (): void {
+        Route::post('/orders/config-override', function (Request $request) {
+            test()->controllerExecutionCount++;
+
+            $request->validate(['item' => 'required']);
+
+            return response()->json(['id' => 1]);
+        })->middleware(Idempotent::using(cacheStatuses: ['client_error' => true]));
+    });
+
+    $this->postJson('/orders/config-override', [], ['Idempotency-Key' => 'key-1'])
+        ->assertUnprocessable();
+
+    $this->postJson('/orders/config-override', [], ['Idempotency-Key' => 'key-1'])
+        ->assertUnprocessable()
+        ->assertHeader('Idempotency-Replayed', 'true');
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
 test('lock is released after downstream exceptions', function (): void {
     $this->withoutExceptionHandling();
 
@@ -687,13 +818,38 @@ test('lock is released after downstream exceptions', function (): void {
 
 test('using generates the correct middleware string', function (): void {
     expect(Idempotent::using())
-        ->toBe(Idempotent::class . ':3600,1,user,Idempotency-Key,10')
+        ->toBe(Idempotent::class . ':3600,1,user,Idempotency-Key,10,11111')
         ->and(Idempotent::using(ttl: 600))
-        ->toBe(Idempotent::class . ':600,1,user,Idempotency-Key,10')
+        ->toBe(Idempotent::class . ':600,1,user,Idempotency-Key,10,11111')
         ->and(Idempotent::using(lockTimeout: 45))
-        ->toBe(Idempotent::class . ':3600,1,user,Idempotency-Key,45')
+        ->toBe(Idempotent::class . ':3600,1,user,Idempotency-Key,45,11111')
         ->and(Idempotent::using(required: false, scope: IdempotencyScope::Ip, header: 'X-Idempotency-Key'))
-        ->toBe(Idempotent::class . ':3600,0,ip,X-Idempotency-Key,10');
+        ->toBe(Idempotent::class . ':3600,0,ip,X-Idempotency-Key,10,11111')
+        ->and(Idempotent::using(cacheStatuses: ['client_error' => false, 'server_error' => false]))
+        ->toBe(Idempotent::class . ':3600,1,user,Idempotency-Key,10,11100');
+});
+
+test('a legacy five field middleware string is still handled', function (): void {
+    // Regression: cached routes (php artisan route:cache) built before this
+    // option was added still pass five serialized values to handle(), so the
+    // new parameter must stay optional and fall back to the config value.
+    Route::middleware('web')->group(function (): void {
+        Route::post('/orders/legacy-string', function () {
+            test()->controllerExecutionCount++;
+
+            return response()->json(['id' => 1]);
+        })->middleware(Idempotent::class . ':3600,1,user,Idempotency-Key,10');
+    });
+
+    $this->postJson('/orders/legacy-string', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
+        ->assertOk()
+        ->assertHeaderMissing('Idempotency-Replayed');
+
+    $this->postJson('/orders/legacy-string', ['item' => 'widget'], ['Idempotency-Key' => 'key-1'])
+        ->assertOk()
+        ->assertHeader('Idempotency-Replayed', 'true');
+
+    expect($this->controllerExecutionCount)->toBe(1);
 });
 
 test('zero lock_timeout on using() throws', function (): void {
@@ -750,7 +906,7 @@ test('using() accepts the legacy positional argument order', function (): void {
     // (ttl, required, scope, header) working unchanged.
     // lockTimeout is omitted, so it falls back to the config default (10).
     expect(Idempotent::using(600, false, IdempotencyScope::Ip, 'X-Idempotency-Key'))
-        ->toBe(Idempotent::class . ':600,0,ip,X-Idempotency-Key,10');
+        ->toBe(Idempotent::class . ':600,0,ip,X-Idempotency-Key,10,11111');
 });
 
 test('omitted middleware options pull defaults from config', function (): void {

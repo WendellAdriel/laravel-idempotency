@@ -6,9 +6,13 @@ namespace WendellAdriel\Idempotency\Support;
 
 use InvalidArgumentException;
 use WendellAdriel\Idempotency\Enums\IdempotencyScope;
+use WendellAdriel\Idempotency\Enums\ResponseCategory;
 
 final readonly class IdempotencyOptions
 {
+    /**
+     * @param  array<string, bool>  $cacheStatuses
+     */
     public function __construct(
         public int $ttl,
         public bool $required,
@@ -16,14 +20,19 @@ final readonly class IdempotencyOptions
         public string $header,
         public int $lockTimeout,
         public string $input = '_idempotency_key',
+        public array $cacheStatuses = [],
     ) {}
 
+    /**
+     * @param  array<string, mixed>|string|null  $cacheStatuses
+     */
     public static function resolve(
         null|int|string $ttl = null,
         null|bool|string $required = null,
         null|string|IdempotencyScope $scope = null,
         ?string $header = null,
         null|int|string $lockTimeout = null,
+        null|array|string $cacheStatuses = null,
     ): self {
         return new self(
             ttl: self::resolveTtl($ttl),
@@ -32,6 +41,7 @@ final readonly class IdempotencyOptions
             header: $header ?? config()->string('idempotency.header'),
             lockTimeout: self::resolveLockTimeout($lockTimeout),
             input: config()->string('idempotency.input'),
+            cacheStatuses: self::resolveCacheStatuses($cacheStatuses),
         );
     }
 
@@ -43,6 +53,7 @@ final readonly class IdempotencyOptions
             $this->scope->value,
             $this->header,
             $this->lockTimeout,
+            $this->serializeCacheStatuses(),
         ]);
     }
 
@@ -80,5 +91,84 @@ final readonly class IdempotencyOptions
         return $required !== null
             ? filter_var($required, FILTER_VALIDATE_BOOLEAN)
             : config()->boolean('idempotency.required');
+    }
+
+    /**
+     * @param  array<string, mixed>|string|null  $cacheStatuses
+     * @return array<string, bool>
+     */
+    private static function resolveCacheStatuses(null|array|string $cacheStatuses): array
+    {
+        $configured = $cacheStatuses ?? config('idempotency.cache_statuses', []);
+
+        if (is_string($configured)) {
+            return self::parseCacheStatusFlags($configured);
+        }
+
+        if (! is_array($configured)) {
+            throw new InvalidArgumentException('The cache_statuses must be an array of response category flags.');
+        }
+
+        $overrides = [];
+
+        foreach ($configured as $key => $enabled) {
+            $category = ResponseCategory::tryFrom((string) $key)
+                ?? throw new InvalidArgumentException(sprintf('Unsupported cache status category [%s].', $key));
+
+            $overrides[$category->value] = is_bool($enabled)
+                ? $enabled
+                : filter_var($enabled, FILTER_VALIDATE_BOOLEAN);
+        }
+
+        return self::normalizeCacheStatuses($overrides);
+    }
+
+    /**
+     * @return array<string, bool>
+     */
+    private static function parseCacheStatusFlags(string $flags): array
+    {
+        $cases = ResponseCategory::cases();
+
+        if (strlen($flags) !== count($cases) || preg_match('/^[01]+$/', $flags) !== 1) {
+            throw new InvalidArgumentException(sprintf(
+                'The cache_statuses flags must be %d characters of 0 or 1.',
+                count($cases),
+            ));
+        }
+
+        $overrides = [];
+
+        foreach ($cases as $index => $case) {
+            $overrides[$case->value] = $flags[$index] === '1';
+        }
+
+        return $overrides;
+    }
+
+    /**
+     * @param  array<string, bool>  $overrides
+     * @return array<string, bool>
+     */
+    private static function normalizeCacheStatuses(array $overrides): array
+    {
+        $normalized = [];
+
+        foreach (ResponseCategory::cases() as $case) {
+            $normalized[$case->value] = $case->isEnabledIn($overrides);
+        }
+
+        return $normalized;
+    }
+
+    private function serializeCacheStatuses(): string
+    {
+        $flags = '';
+
+        foreach (ResponseCategory::cases() as $case) {
+            $flags .= $case->isEnabledIn($this->cacheStatuses) ? '1' : '0';
+        }
+
+        return $flags;
     }
 }
