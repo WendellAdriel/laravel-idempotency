@@ -91,7 +91,7 @@ The default works with a hidden form input named `_idempotency_key`. To use `_re
 
 ## Cache statuses
 
-The `cache_statuses` option determines which response classes are stored under an idempotency key:
+The `cache_statuses` option determines which response categories are stored under an idempotency key:
 
 ```php
 'cache_statuses' => [
@@ -105,7 +105,7 @@ The `cache_statuses` option determines which response classes are stored under a
 
 Each key maps to an HTTP status range:
 
-| Class | Status codes |
+| Category | Status codes |
 | --- | --- |
 | `informational` | `1xx` |
 | `success` | `2xx` |
@@ -113,7 +113,7 @@ Each key maps to an HTTP status range:
 | `client_error` | `4xx` |
 | `server_error` | `5xx` |
 
-Every class is enabled by default, which stores every response. Disabling a class leaves the key untouched for those responses: the client may retry with the same key and the route is executed again. Nothing is written to the [key index](../operations/maintenance-commands.md) for a response that is not stored.
+Every category is enabled by default, which stores every response. Disabling a category leaves the key untouched for those responses: the client may retry with the same key and the route is executed again. Nothing is written to the [key index](../operations/maintenance-commands.md) for a response that is not stored.
 
 A request that fails validation otherwise occupies its key for the whole TTL. Resubmitting the corrected payload with the same key returns `422 Unprocessable Entity`, because the request data no longer matches the stored fingerprint, even though the operation never happened. Disable `client_error` to free the key for those retries:
 
@@ -124,9 +124,9 @@ A request that fails validation otherwise occupies its key for the whole TTL. Re
 ],
 ```
 
-Classes you leave out stay enabled, so the map above still caches `1xx`, `2xx`, and `3xx` responses. Keep `redirection` enabled when you rely on the [request input](../basics/usage.md#request-input) flow, since a successful form submission usually answers with `302 Found`.
+Categories you leave out stay enabled, so the map above still caches `1xx`, `2xx`, and `3xx` responses. Keep `redirection` enabled when you rely on the [request input](../basics/usage.md#request-input) flow, since a successful form submission usually answers with `302 Found`.
 
-You may also set the classes per route or per controller with the `cacheStatuses` option:
+You may also set the categories per route or per controller with the `cacheStatuses` option:
 
 ```php
 Route::post('/orders', StoreOrderController::class)->middleware(
@@ -134,7 +134,7 @@ Route::post('/orders', StoreOrderController::class)->middleware(
 );
 ```
 
-An unknown class name throws an `InvalidArgumentException` when options are resolved, so a typo fails fast instead of silently caching everything.
+An unknown category name throws an `InvalidArgumentException` when options are resolved, so a typo fails fast instead of silently caching everything.
 
 ## Lock timeout
 

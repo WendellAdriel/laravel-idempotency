@@ -13,7 +13,7 @@ use Illuminate\Support\Carbon;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use WendellAdriel\Idempotency\Enums\IdempotencyScope;
-use WendellAdriel\Idempotency\Enums\ResponseStatusClass;
+use WendellAdriel\Idempotency\Enums\ResponseCategory;
 use WendellAdriel\Idempotency\Support\IdempotencyCache;
 use WendellAdriel\Idempotency\Support\IdempotencyIndex;
 use WendellAdriel\Idempotency\Support\IdempotencyOptions;
@@ -158,7 +158,7 @@ final readonly class Idempotent
 
     private function shouldCache(SymfonyResponse $response, IdempotencyOptions $options): bool
     {
-        return ResponseStatusClass::fromStatusCode($response->getStatusCode())
+        return ResponseCategory::fromStatusCode($response->getStatusCode())
             ->isEnabledIn($options->cacheStatuses);
     }
 

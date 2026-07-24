@@ -160,16 +160,16 @@ test('malformed cache_statuses flags are rejected', function (): void {
     }
 });
 
-test('an unknown cache status class is rejected', function (): void {
+test('an unknown cache status category is rejected', function (): void {
     expect(fn (): IdempotencyOptions => IdempotencyOptions::resolve(cacheStatuses: ['sucess' => false]))
-        ->toThrow(InvalidArgumentException::class, 'Unsupported cache status class [sucess].');
+        ->toThrow(InvalidArgumentException::class, 'Unsupported cache status category [sucess].');
 });
 
 test('a non array cache_statuses config value is rejected', function (): void {
     config()->set('idempotency.cache_statuses', 42);
 
     expect(fn (): IdempotencyOptions => IdempotencyOptions::resolve())
-        ->toThrow(InvalidArgumentException::class, 'The cache_statuses must be an array of response class flags.');
+        ->toThrow(InvalidArgumentException::class, 'The cache_statuses must be an array of response category flags.');
 });
 
 test('truthy cache_statuses values from a published config are cast to booleans', function (): void {

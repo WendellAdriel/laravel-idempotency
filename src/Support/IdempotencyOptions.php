@@ -6,7 +6,7 @@ namespace WendellAdriel\Idempotency\Support;
 
 use InvalidArgumentException;
 use WendellAdriel\Idempotency\Enums\IdempotencyScope;
-use WendellAdriel\Idempotency\Enums\ResponseStatusClass;
+use WendellAdriel\Idempotency\Enums\ResponseCategory;
 
 final readonly class IdempotencyOptions
 {
@@ -99,9 +99,6 @@ final readonly class IdempotencyOptions
      */
     private static function resolveCacheStatuses(null|array|string $cacheStatuses): array
     {
-        // config() instead of config()->array() so that an absent key falls back
-        // to the package default: an app holding a published config file from an
-        // older version never runs mergeConfigFrom when its config is cached.
         $configured = $cacheStatuses ?? config('idempotency.cache_statuses', []);
 
         if (is_string($configured)) {
@@ -109,16 +106,16 @@ final readonly class IdempotencyOptions
         }
 
         if (! is_array($configured)) {
-            throw new InvalidArgumentException('The cache_statuses must be an array of response class flags.');
+            throw new InvalidArgumentException('The cache_statuses must be an array of response category flags.');
         }
 
         $overrides = [];
 
         foreach ($configured as $key => $enabled) {
-            $class = ResponseStatusClass::tryFrom((string) $key)
-                ?? throw new InvalidArgumentException(sprintf('Unsupported cache status class [%s].', $key));
+            $category = ResponseCategory::tryFrom((string) $key)
+                ?? throw new InvalidArgumentException(sprintf('Unsupported cache status category [%s].', $key));
 
-            $overrides[$class->value] = is_bool($enabled)
+            $overrides[$category->value] = is_bool($enabled)
                 ? $enabled
                 : filter_var($enabled, FILTER_VALIDATE_BOOLEAN);
         }
@@ -131,7 +128,7 @@ final readonly class IdempotencyOptions
      */
     private static function parseCacheStatusFlags(string $flags): array
     {
-        $cases = ResponseStatusClass::cases();
+        $cases = ResponseCategory::cases();
 
         if (strlen($flags) !== count($cases) || preg_match('/^[01]+$/', $flags) !== 1) {
             throw new InvalidArgumentException(sprintf(
@@ -157,7 +154,7 @@ final readonly class IdempotencyOptions
     {
         $normalized = [];
 
-        foreach (ResponseStatusClass::cases() as $case) {
+        foreach (ResponseCategory::cases() as $case) {
             $normalized[$case->value] = $case->isEnabledIn($overrides);
         }
 
@@ -168,7 +165,7 @@ final readonly class IdempotencyOptions
     {
         $flags = '';
 
-        foreach (ResponseStatusClass::cases() as $case) {
+        foreach (ResponseCategory::cases() as $case) {
             $flags .= $case->isEnabledIn($this->cacheStatuses) ? '1' : '0';
         }
 

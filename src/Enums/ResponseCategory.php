@@ -6,7 +6,7 @@ namespace WendellAdriel\Idempotency\Enums;
 
 use Illuminate\Http\Response;
 
-enum ResponseStatusClass: string
+enum ResponseCategory: string
 {
     case Informational = 'informational';
     case Success = 'success';
@@ -25,12 +25,7 @@ enum ResponseStatusClass: string
         };
     }
 
-    /**
-     * Missing flags default to enabled, so a published config file that only
-     * lists some of the classes keeps caching everything else.
-     *
-     * @param  array<string, bool>  $statuses
-     */
+    /** @param array<string, bool> $statuses */
     public function isEnabledIn(array $statuses): bool
     {
         return $statuses[$this->value] ?? true;

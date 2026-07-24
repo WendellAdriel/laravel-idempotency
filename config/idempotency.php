@@ -63,10 +63,9 @@ return [
     | Idempotency Cache Statuses
     |--------------------------------------------------------------------------
     |
-    | Determine which response classes are stored under an idempotency key.
-    | Disabling a class leaves the key untouched for those responses, so a
-    | client may retry instead of replaying a stored failure for the whole
-    | TTL. Disable client_error to free keys used by failed validation.
+    | Here you may define which response categories are stored for a request key.
+    | All categories are enabled by default. Disable one so clients may retry
+    | rather than replaying a stored response after the request failed.
     |
     */
     'cache_statuses' => [

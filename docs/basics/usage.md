@@ -81,7 +81,7 @@ Route::post('/payments', ChargePaymentController::class)->middleware(
 
 The route-level options are serialized into the middleware string and override the package configuration for that route only.
 
-The `cacheStatuses` option controls which response classes are stored. Classes you leave out stay enabled, so the example above caches everything except `4xx` responses: a failed request leaves the key free and the client may retry with the same key instead of being blocked by a cached error for the rest of the TTL. See [cache statuses](../getting-started/configuration.md#cache-statuses) for the full list of classes.
+The `cacheStatuses` option controls which response categories are stored. Categories you leave out stay enabled, so the example above caches everything except `4xx` responses: a failed request leaves the key free and the client may retry with the same key instead of being blocked by a cached error for the rest of the TTL. See [cache statuses](../getting-started/configuration.md#cache-statuses) for the full list of categories.
 
 ## Middleware alias
 
