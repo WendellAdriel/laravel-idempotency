@@ -101,6 +101,14 @@ beforeEach(function (): void {
             return response()->json(['id' => 1]);
         })->middleware(Idempotent::class);
 
+        Route::post('/orders/stream', function () {
+            test()->controllerExecutionCount++;
+
+            return response()->streamDownload(function (): void {
+                echo 'actual-file-bytes';
+            }, 'file.txt');
+        })->middleware(Idempotent::class);
+
         Route::put('/orders', fn () => response()->json(['method' => 'put']))->middleware(Idempotent::class);
 
         Route::put('/orders/1', fn () => response()->json(['updated' => true]))->middleware(Idempotent::class);
@@ -676,6 +684,60 @@ test('redirects can be replayed', function (): void {
         ->assertHeader('Idempotency-Replayed', 'true');
 
     expect($this->controllerExecutionCount)->toBe(1);
+});
+
+test('streamed responses are not cached and always re-execute', function (): void {
+    // Regression: Symfony's StreamedResponse::getContent() always returns
+    // false, so caching it used to store a null body and replay it as an
+    // empty response, silently destroying the streamed payload. Since the
+    // body cannot be captured safely, the middleware must skip caching
+    // instead, meaning idempotency protection is not applied to this route.
+    $first = $this->post('/orders/stream', [], ['Idempotency-Key' => 'key-1']);
+    $first->assertOk()->assertHeaderMissing('Idempotency-Replayed');
+
+    expect($first->streamedContent())->toBe('actual-file-bytes');
+
+    $second = $this->post('/orders/stream', [], ['Idempotency-Key' => 'key-1']);
+    $second->assertOk()->assertHeaderMissing('Idempotency-Replayed');
+
+    expect($second->streamedContent())->toBe('actual-file-bytes')
+        ->and($this->controllerExecutionCount)->toBe(2);
+
+    $index = $this->app->make(IdempotencyIndex::class);
+
+    expect($index->all())->toBe([]);
+});
+
+test('binary file responses are not cached and always re-execute', function (): void {
+    // Same root cause as streamed responses: BinaryFileResponse::getContent()
+    // also always returns false.
+    $path = sys_get_temp_dir() . '/idempotency-download-test.txt';
+    file_put_contents($path, 'binary-file-bytes');
+
+    Route::middleware('web')->group(function () use ($path): void {
+        Route::post('/orders/download', function () use ($path) {
+            test()->controllerExecutionCount++;
+
+            return response()->download($path, 'file.txt');
+        })->middleware(Idempotent::class);
+    });
+
+    try {
+        $this->post('/orders/download', [], ['Idempotency-Key' => 'key-1'])
+            ->assertOk()
+            ->assertHeaderMissing('Idempotency-Replayed');
+
+        $this->post('/orders/download', [], ['Idempotency-Key' => 'key-1'])
+            ->assertOk()
+            ->assertHeaderMissing('Idempotency-Replayed');
+    } finally {
+        unlink($path);
+    }
+
+    $index = $this->app->make(IdempotencyIndex::class);
+
+    expect($this->controllerExecutionCount)->toBe(2)
+        ->and($index->all())->toBe([]);
 });
 
 test('validation exceptions do not poison the stored response', function (): void {
