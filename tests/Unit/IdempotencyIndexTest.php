@@ -2,7 +2,13 @@
 
 declare(strict_types=1);
 
+use Illuminate\Cache\ArrayStore;
+use Illuminate\Cache\Lock;
+use Illuminate\Cache\Repository;
+use Illuminate\Contracts\Cache\LockProvider;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Cache\Repository as Cache;
+use Illuminate\Contracts\Cache\Store;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
@@ -67,6 +73,169 @@ test('remember called twice with the same storage key replaces the previous memb
     $members = $this->index->forMember(IdempotencyScope::User, '5');
     expect($members)->toHaveCount(1)
         ->and($members[0]->status)->toBe(201);
+});
+
+test('remember serializes the entry write and the scopes write behind their own locks', function (): void {
+    // Regression: two concurrent requests remembering different storage keys
+    // under the same scope both used to read the entry before either had
+    // written, so the second write silently discarded the first member. The
+    // fix wraps both the per-entry read-modify-write and the shared scopes
+    // registry read-modify-write in an atomic lock. This asserts the code
+    // actually acquires those locks (mutual exclusion itself is Laravel's
+    // Lock::block(), which is trusted framework behavior).
+    $store = new class() extends ArrayStore
+    {
+        /** @var list<string> */
+        public array $lockedKeys = [];
+
+        public function lock($name, $seconds = 0, $owner = null): Illuminate\Contracts\Cache\Lock
+        {
+            $this->lockedKeys[] = $name;
+
+            return parent::lock($name, $seconds, $owner);
+        }
+    };
+
+    $index = new IdempotencyIndex(new Repository($store));
+    $index->remember(makeMember());
+
+    expect($store->lockedKeys)->toBe([
+        'idempotent-index-lock:user:5',
+        'idempotent-index-lock:scopes',
+    ]);
+});
+
+test('remember falls back to an unsynchronized write when the lock cannot be acquired in time', function (): void {
+    // Regression: a LockTimeoutException used to propagate straight out of
+    // remember(), which is called after the response is already cached and
+    // ready to return - turning a successful request into a 500 just because
+    // the bookkeeping index lock lost a race under contention.
+    $store = new class() extends ArrayStore
+    {
+        public function lock($name, $seconds = 0, $owner = null): Illuminate\Contracts\Cache\Lock
+        {
+            return new class($name, $seconds) extends Lock
+            {
+                public function acquire(): bool
+                {
+                    return true;
+                }
+
+                public function release(): bool
+                {
+                    return true;
+                }
+
+                public function forceRelease(): void {}
+
+                protected function getCurrentOwner(): string
+                {
+                    return $this->owner;
+                }
+
+                public function block($seconds, $callback = null): mixed
+                {
+                    throw new LockTimeoutException();
+                }
+            };
+        }
+    };
+
+    $index = new IdempotencyIndex(new Repository($store));
+
+    $index->remember(makeMember());
+
+    $members = $index->forMember(IdempotencyScope::User, '5');
+
+    expect($members)->toHaveCount(1)
+        ->and($members[0]->storageKey)->toBe('hash-1');
+});
+
+test('remember still works when the cache store does not support atomic locks', function (): void {
+    $store = new class() implements Store
+    {
+        /** @var array<string, mixed> */
+        private array $items = [];
+
+        public function get($key): mixed
+        {
+            return $this->items[$key] ?? null;
+        }
+
+        public function many(array $keys): array
+        {
+            return array_map($this->get(...), array_combine($keys, $keys));
+        }
+
+        public function put($key, $value, $seconds): bool
+        {
+            $this->items[$key] = $value;
+
+            return true;
+        }
+
+        public function putMany(array $values, $seconds): bool
+        {
+            foreach ($values as $key => $value) {
+                $this->put($key, $value, $seconds);
+            }
+
+            return true;
+        }
+
+        public function increment($key, $value = 1): int
+        {
+            $this->items[$key] = (is_int($this->items[$key] ?? null) ? $this->items[$key] : 0) + $value;
+
+            return $this->items[$key];
+        }
+
+        public function decrement($key, $value = 1): int
+        {
+            return $this->increment($key, -$value);
+        }
+
+        public function forever($key, $value): bool
+        {
+            return $this->put($key, $value, 0);
+        }
+
+        public function touch($key, $seconds): bool
+        {
+            return true;
+        }
+
+        public function forget($key): bool
+        {
+            unset($this->items[$key]);
+
+            return true;
+        }
+
+        public function flush(): bool
+        {
+            $this->items = [];
+
+            return true;
+        }
+
+        public function getPrefix(): string
+        {
+            return '';
+        }
+    };
+
+    expect($store)->not->toBeInstanceOf(LockProvider::class);
+
+    $index = new IdempotencyIndex(new Repository($store));
+    $index->remember(makeMember(['storageKey' => 'hash-a']));
+    $index->remember(makeMember(['storageKey' => 'hash-b']));
+
+    $members = $index->forMember(IdempotencyScope::User, '5');
+    $keys = array_map(fn (IndexMember $m): string => $m->storageKey, $members);
+    sort($keys);
+
+    expect($keys)->toBe(['hash-a', 'hash-b']);
 });
 
 test('remember called with different storage keys under the same scope coexist', function (): void {

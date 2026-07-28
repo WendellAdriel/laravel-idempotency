@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace WendellAdriel\Idempotency\Support;
 
+use Closure;
+use Illuminate\Contracts\Cache\LockProvider;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Support\Carbon;
 use WendellAdriel\Idempotency\Enums\IdempotencyScope;
@@ -14,6 +17,12 @@ final readonly class IdempotencyIndex
 
     public const string ENTRY_PREFIX = 'idempotent-index:';
 
+    private const string SCOPES_LOCK_KEY = 'idempotent-index-lock:scopes';
+
+    private const string ENTRY_LOCK_PREFIX = 'idempotent-index-lock:';
+
+    private const int LOCK_TIMEOUT = 5;
+
     public function __construct(
         private Repository $cache,
     ) {}
@@ -23,18 +32,24 @@ final readonly class IdempotencyIndex
         $entryKey = $this->entryKey($member->scope, $member->identifier);
         $scopeMember = $this->scopeMember($member->scope, $member->identifier);
 
-        $entry = $this->loadEntry($entryKey);
-        $entry[$member->storageKey] = $member;
+        $ttl = $this->withLock(self::ENTRY_LOCK_PREFIX . $scopeMember, function () use ($entryKey, $member): int {
+            $entry = $this->loadEntry($entryKey);
+            $entry[$member->storageKey] = $member;
 
-        $ttl = $this->remainingTtl($entry);
+            $ttl = $this->remainingTtl($entry);
 
-        $this->cache->put($entryKey, $this->serializeEntry($entry), $ttl);
+            $this->cache->put($entryKey, $this->serializeEntry($entry), $ttl);
 
-        $scopes = $this->loadScopes();
-        if (! in_array($scopeMember, $scopes, true)) {
-            $scopes[] = $scopeMember;
-        }
-        $this->cache->put(self::SCOPES_KEY, $scopes, $ttl);
+            return $ttl;
+        });
+
+        $this->withLock(self::SCOPES_LOCK_KEY, function () use ($scopeMember, $ttl): void {
+            $scopes = $this->loadScopes();
+            if (! in_array($scopeMember, $scopes, true)) {
+                $scopes[] = $scopeMember;
+            }
+            $this->cache->put(self::SCOPES_KEY, $scopes, $ttl);
+        });
     }
 
     /**
@@ -385,5 +400,30 @@ final readonly class IdempotencyIndex
     private function now(): int
     {
         return Carbon::now()->getTimestamp();
+    }
+
+    /**
+     * @template TReturn
+     *
+     * @param  Closure(): TReturn  $callback
+     * @return TReturn
+     */
+    private function withLock(string $lockKey, Closure $callback): mixed
+    {
+        $store = $this->cache->getStore();
+
+        if (! $store instanceof LockProvider) {
+            return $callback();
+        }
+
+        try {
+            return $store->lock($lockKey, self::LOCK_TIMEOUT)->block(self::LOCK_TIMEOUT, $callback);
+        } catch (LockTimeoutException) {
+            // The index update is bookkeeping for `idempotency:list`/`forget`,
+            // not the replay guarantee (that response is already cached by
+            // the time this runs). Losing the lock race must never turn an
+            // otherwise successful request into a 500.
+            return $callback();
+        }
     }
 }
