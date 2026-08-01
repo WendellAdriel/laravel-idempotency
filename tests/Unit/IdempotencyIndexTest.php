@@ -532,6 +532,37 @@ test('index entry ttl refreshes to the max expiresAt among its members', functio
     Carbon::setTestNow();
 });
 
+test('scopes registry outlives shorter entries while longer entries remain active', function (): void {
+    Carbon::setTestNow('2026-01-01 00:00:00');
+    $now = Carbon::now()->getTimestamp();
+
+    $this->index->remember(makeMember([
+        'storageKey' => 'hash-long',
+        'identifier' => '5',
+        'createdAt' => $now,
+        'expiresAt' => $now + 3600,
+    ]));
+
+    $this->index->remember(makeMember([
+        'storageKey' => 'hash-short',
+        'identifier' => '6',
+        'createdAt' => $now,
+        'expiresAt' => $now + 60,
+    ]));
+
+    Carbon::setTestNow(Carbon::parse('2026-01-01 00:00:00')->addSeconds(120));
+
+    $members = $this->index->all();
+
+    expect($members)->toHaveCount(1)
+        ->and($members[0]->storageKey)->toBe('hash-long')
+        ->and($this->cache->get(IdempotencyIndex::SCOPES_KEY))
+        ->toContain('user:5')
+        ->not->toContain('user:6');
+
+    Carbon::setTestNow();
+});
+
 test('forMember returns an empty list when there is no index entry and writes nothing', function (): void {
     $result = $this->index->forMember(IdempotencyScope::User, '999');
 

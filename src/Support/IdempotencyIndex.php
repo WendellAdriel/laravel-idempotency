@@ -44,7 +44,8 @@ final readonly class IdempotencyIndex
             if (! in_array($scopeMember, $scopes, true)) {
                 $scopes[] = $scopeMember;
             }
-            $this->cache->put(self::SCOPES_KEY, $scopes, $ttl);
+
+            $this->cache->forever(self::SCOPES_KEY, $scopes);
         });
     }
 
