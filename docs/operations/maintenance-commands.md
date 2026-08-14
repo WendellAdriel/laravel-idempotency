@@ -1,12 +1,19 @@
 # Maintenance Commands
 
 - [Introduction](#introduction)
+- [Concurrent maintenance](#concurrent-maintenance)
 - [Listing cached entries](#listing-cached-entries)
 - [Forgetting cached entries](#forgetting-cached-entries)
 
 ## Introduction
 
 Laravel Idempotency ships two Artisan commands to inspect and clear cached idempotent entries. Both commands read from the same cache store the middleware uses, so the driver must support atomic locks. In multi-server deployments, every application server must use the same shared cache backend. The `array` driver is only suitable for tests or single-process development. See Laravel's [atomic lock documentation](https://laravel.com/docs/cache#atomic-locks) for supported deployment options.
+
+## Concurrent maintenance
+
+Commands that visit several scopes process one scope at a time instead of holding a single lock for the entire index. This lets requests continue writing entries for other scopes while a listing or bulk removal is running.
+
+An entry written after a command has processed its scope may remain cached and can be listed or removed by a later command invocation. This boundary applies only to maintenance command results; it does not change the idempotent request-response guarantee.
 
 ## Listing cached entries
 
