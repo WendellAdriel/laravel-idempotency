@@ -113,7 +113,9 @@ Each key maps to an HTTP status range:
 | `client_error` | `4xx` |
 | `server_error` | `5xx` |
 
-Every category is enabled by default, which stores every response. Disabling a category leaves the key untouched for those responses: the client may retry with the same key and the route is executed again. Nothing is written to the [key index](../operations/maintenance-commands.md) for a response that is not stored.
+Every category is enabled by default. This stores every response whose content can be captured. Disabling a category leaves the key untouched for those responses: the client may retry with the same key and the route is executed again. Nothing is written to the [key index](../operations/maintenance-commands.md) for a response that is not stored.
+
+Streamed and binary file responses are not stored because their bodies cannot be captured safely, even when their status category is enabled. A repeated request with the same key executes the route again, and the response does not include an `Idempotency-Replayed` header. Do not rely on this middleware to prevent repeated side effects for endpoints that return these response types.
 
 A request that fails validation otherwise occupies its key for the whole TTL. Resubmitting the corrected payload with the same key returns `422 Unprocessable Entity`, because the request data no longer matches the stored fingerprint, even though the operation never happened. Disable `client_error` to free the key for those retries:
 

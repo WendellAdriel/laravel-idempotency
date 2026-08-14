@@ -30,6 +30,8 @@ The middleware reads the key from the `Idempotency-Key` header or the `_idempote
 
 When the same key is sent again with the same request data, the original response is replayed and the response includes an `Idempotency-Replayed: true` header.
 
+Streamed and binary file responses are not stored because their bodies cannot be captured safely. A repeated request with the same key executes the route again, and the response does not include the replay header. See [cache statuses](../getting-started/configuration.md#cache-statuses) for more information about responses that are not stored.
+
 ## Request input
 
 Standard HTML forms cannot set custom request headers. You may include the idempotency key in a hidden input instead:

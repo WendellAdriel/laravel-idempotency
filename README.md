@@ -63,6 +63,8 @@ You may pass an existing key with `@idempotency($key)`.
 
 When the same key is sent again with the same request data, the package replays the original response instead of executing your route again.
 
+Streamed and binary file responses cannot be captured safely, so they are not cached. A repeated request with the same key executes the route again, and the response does not include an `Idempotency-Replayed` header.
+
 Customize a single route with `Idempotent::using`:
 
 ```php
