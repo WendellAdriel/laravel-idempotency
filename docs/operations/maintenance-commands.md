@@ -6,7 +6,7 @@
 
 ## Introduction
 
-Laravel Idempotency ships two Artisan commands to inspect and clear cached idempotent entries. Both commands read from the same cache store the middleware uses, so the driver must support atomic locks in production.
+Laravel Idempotency ships two Artisan commands to inspect and clear cached idempotent entries. Both commands read from the same cache store the middleware uses, so the driver must support atomic locks.
 
 ## Listing cached entries
 
