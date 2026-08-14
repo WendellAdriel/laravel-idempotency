@@ -34,6 +34,7 @@ Use this skill when a Laravel application needs retry-safe write requests, idemp
   - `idempotency.scope`
   - `idempotency.header`
   - `idempotency.input`
+  - `idempotency.strict_index_locks`
 
 ### 3. Choose the integration style
 

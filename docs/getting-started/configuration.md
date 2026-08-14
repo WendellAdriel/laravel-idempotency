@@ -8,6 +8,7 @@
 - [Request input name](#request-input-name)
 - [Cache statuses](#cache-statuses)
 - [Lock timeout](#lock-timeout)
+- [Strict index locks](#strict-index-locks)
 
 ## Introduction
 
@@ -17,7 +18,7 @@ Laravel Idempotency stores its application-level options in `config/idempotency.
 php artisan vendor:publish --tag="idempotency-config"
 ```
 
-The default configuration is intentionally small. It controls stored response lifetime, key input behavior, scope resolution, which responses are stored, and the in-flight lock timeout.
+The default configuration is intentionally small. It controls stored response lifetime, key input behavior, scope resolution, which responses are stored, the in-flight lock timeout, and strict index locking.
 
 ```php
 return [
@@ -34,6 +35,7 @@ return [
         'server_error' => true,
     ],
     'lock_timeout' => env('IDEMPOTENCY_LOCK_TIMEOUT', 10),
+    'strict_index_locks' => env('IDEMPOTENCY_STRICT_INDEX_LOCKS', false),
 ];
 ```
 
@@ -149,3 +151,13 @@ The `lock_timeout` option defines how long the in-flight atomic lock is held whi
 Increase this value for endpoints with long processing times. If the lock expires before the endpoint finishes, a concurrent request with the same key may proceed.
 
 Like `ttl`, the `lock_timeout` must resolve to a positive integer (`>= 1`). A value of `0` or lower throws an `InvalidArgumentException` when options are resolved.
+
+## Strict index locks
+
+The `strict_index_locks` option controls whether direct index and maintenance command use fails when the configured cache store does not support atomic locks:
+
+```php
+'strict_index_locks' => env('IDEMPOTENCY_STRICT_INDEX_LOCKS', false),
+```
+
+It is disabled by default to preserve existing behavior. Enable `IDEMPOTENCY_STRICT_INDEX_LOCKS=true` to fail fast instead of using the fallback for direct index and maintenance command use.
