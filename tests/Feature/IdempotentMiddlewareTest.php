@@ -711,7 +711,12 @@ test('streamed responses are not cached and always re-execute', function (): voi
 test('binary file responses are not cached and always re-execute', function (): void {
     // Same root cause as streamed responses: BinaryFileResponse::getContent()
     // also always returns false.
-    $path = sys_get_temp_dir() . '/idempotency-download-test.txt';
+    $path = tempnam(sys_get_temp_dir(), 'idempotency-download-');
+
+    if ($path === false) {
+        throw new RuntimeException('Unable to create a temporary download file.');
+    }
+
     file_put_contents($path, 'binary-file-bytes');
 
     Route::middleware('web')->group(function () use ($path): void {
@@ -723,13 +728,16 @@ test('binary file responses are not cached and always re-execute', function (): 
     });
 
     try {
-        $this->post('/orders/download', [], ['Idempotency-Key' => 'key-1'])
+        $first = $this->post('/orders/download', [], ['Idempotency-Key' => 'key-1'])
             ->assertOk()
             ->assertHeaderMissing('Idempotency-Replayed');
 
-        $this->post('/orders/download', [], ['Idempotency-Key' => 'key-1'])
+        $second = $this->post('/orders/download', [], ['Idempotency-Key' => 'key-1'])
             ->assertOk()
             ->assertHeaderMissing('Idempotency-Replayed');
+
+        expect($first->streamedContent())->toBe('binary-file-bytes')
+            ->and($second->streamedContent())->toBe('binary-file-bytes');
     } finally {
         unlink($path);
     }
