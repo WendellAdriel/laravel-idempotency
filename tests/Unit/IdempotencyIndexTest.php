@@ -7,7 +7,6 @@ use Illuminate\Cache\Lock;
 use Illuminate\Cache\Repository;
 use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Repository as Cache;
-use Illuminate\Contracts\Cache\Store;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
@@ -16,6 +15,7 @@ use WendellAdriel\Idempotency\Http\Middleware\Idempotent;
 use WendellAdriel\Idempotency\Support\IdempotencyIndex;
 use WendellAdriel\Idempotency\Support\IndexMember;
 use WendellAdriel\Idempotency\Tests\Support\IndexLockTimeoutStore;
+use WendellAdriel\Idempotency\Tests\Support\NonLockingStore;
 
 beforeEach(function (): void {
     $this->cache = $this->app->make(Cache::class);
@@ -37,79 +37,6 @@ function makeMember(array $overrides = []): IndexMember
         'createdAt' => $now,
         'expiresAt' => $now + 3600,
     ], $overrides));
-}
-
-final class NonLockingStore implements Store
-{
-    /** @var array<string, mixed> */
-    private array $items = [];
-
-    public function get($key): mixed
-    {
-        return $this->items[$key] ?? null;
-    }
-
-    public function many(array $keys): array
-    {
-        return array_map($this->get(...), array_combine($keys, $keys));
-    }
-
-    public function put($key, $value, $seconds): bool
-    {
-        $this->items[$key] = $value;
-
-        return true;
-    }
-
-    public function putMany(array $values, $seconds): bool
-    {
-        foreach ($values as $key => $value) {
-            $this->put($key, $value, $seconds);
-        }
-
-        return true;
-    }
-
-    public function increment($key, $value = 1): int
-    {
-        $this->items[$key] = (is_int($this->items[$key] ?? null) ? $this->items[$key] : 0) + $value;
-
-        return $this->items[$key];
-    }
-
-    public function decrement($key, $value = 1): int
-    {
-        return $this->increment($key, -$value);
-    }
-
-    public function forever($key, $value): bool
-    {
-        return $this->put($key, $value, 0);
-    }
-
-    public function touch($key, $seconds): bool
-    {
-        return true;
-    }
-
-    public function forget($key): bool
-    {
-        unset($this->items[$key]);
-
-        return true;
-    }
-
-    public function flush(): bool
-    {
-        $this->items = [];
-
-        return true;
-    }
-
-    public function getPrefix(): string
-    {
-        return '';
-    }
 }
 
 final class CooperativeLockStore extends ArrayStore
@@ -305,24 +232,31 @@ test('remember skips the index update when the lock cannot be acquired in time',
         ->and($store->locks)->toBe([]);
 });
 
-test('a non-locking cache store works by default', function (): void {
+test('a non-locking cache store supports sequential index operations by default', function (): void {
     $store = new NonLockingStore();
 
     expect($store)->not->toBeInstanceOf(LockProvider::class);
 
     $index = new IdempotencyIndex(new Repository($store));
-    $index->remember(makeMember(['storageKey' => 'hash-a']));
-    $index->remember(makeMember(['storageKey' => 'hash-b']));
+    $index->remember(makeMember(['storageKey' => 'hash-user']));
+    $index->remember(makeMember([
+        'storageKey' => 'hash-ip',
+        'scope' => IdempotencyScope::Ip,
+        'identifier' => '1.2.3.4',
+    ]));
 
-    $members = $index->forMember(IdempotencyScope::User, '5');
+    $members = $index->all();
+    $removed = $index->forget(IdempotencyScope::User, '5');
+    $remaining = $index->all();
+
     $keys = array_map(fn (IndexMember $member): string => $member->storageKey, $members);
     sort($keys);
 
-    $this->app->instance('cache.store', new Repository($store));
-    $this->app->forgetInstance(IdempotencyIndex::class);
+    $remainingKeys = array_map(fn (IndexMember $member): string => $member->storageKey, $remaining);
 
-    expect($keys)->toBe(['hash-a', 'hash-b'])
-        ->and(Artisan::call('idempotency:list'))->toBe(0);
+    expect($keys)->toBe(['hash-ip', 'hash-user'])
+        ->and($removed)->toBe(['hash-user'])
+        ->and($remainingKeys)->toBe(['hash-ip']);
 });
 
 test('strict index locks reject a non-locking cache store for direct and maintenance use', function (): void {

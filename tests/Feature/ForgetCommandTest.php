@@ -3,11 +3,16 @@
 declare(strict_types=1);
 
 use Illuminate\Auth\GenericUser;
+use Illuminate\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Cache\Repository as Cache;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Route;
 use WendellAdriel\Idempotency\Enums\IdempotencyScope;
 use WendellAdriel\Idempotency\Http\Middleware\Idempotent;
+use WendellAdriel\Idempotency\Support\IdempotencyCache;
 use WendellAdriel\Idempotency\Support\IdempotencyIndex;
+use WendellAdriel\Idempotency\Support\IndexMember;
+use WendellAdriel\Idempotency\Tests\Support\NonLockingStore;
 
 beforeEach(function (): void {
     Route::middleware('web')->group(function (): void {
@@ -51,6 +56,38 @@ test('--all --force removes every index entry and response cache key', function 
     }
 
     expect($cache->get('idempotent-index:scopes'))->toBeNull();
+});
+
+test('forgets entries from a non-locking cache store when used sequentially', function (): void {
+    $cache = new CacheRepository(new NonLockingStore());
+    app()->instance('cache.store', $cache);
+    app()->forgetInstance(IdempotencyCache::class);
+    app()->forgetInstance(IdempotencyIndex::class);
+
+    $index = app()->make(IdempotencyIndex::class);
+    $index->remember(new IndexMember(
+        storageKey: 'hash-non-locking',
+        scope: IdempotencyScope::User,
+        identifier: '1',
+        clientKey: 'non-locking-key',
+        route: '/forget/user',
+        method: 'POST',
+        status: 200,
+        createdAt: Carbon::now()->getTimestamp(),
+        expiresAt: Carbon::now()->addHour()->getTimestamp(),
+    ));
+    $cache->put('idempotent-response:hash-non-locking', ['status' => 200], 3600);
+
+    test()->artisan('idempotency:forget', [
+        '--scope' => 'user',
+        '--id' => '1',
+        '--force' => true,
+    ])
+        ->expectsOutputToContain('Removed 1 idempotent entries.')
+        ->assertExitCode(0);
+
+    expect($index->forMember(IdempotencyScope::User, '1'))->toBe([])
+        ->and($cache->get('idempotent-response:hash-non-locking'))->toBeNull();
 });
 
 test('--scope=user --id filters to the matching user', function (): void {
