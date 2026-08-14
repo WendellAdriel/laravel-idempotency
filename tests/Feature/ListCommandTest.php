@@ -3,12 +3,14 @@
 declare(strict_types=1);
 
 use Illuminate\Auth\GenericUser;
+use Illuminate\Cache\Repository;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Route;
 use WendellAdriel\Idempotency\Enums\IdempotencyScope;
 use WendellAdriel\Idempotency\Http\Middleware\Idempotent;
 use WendellAdriel\Idempotency\Support\IdempotencyIndex;
 use WendellAdriel\Idempotency\Support\IndexMember;
+use WendellAdriel\Idempotency\Tests\Support\NonLockingStore;
 
 beforeEach(function (): void {
     Route::middleware('web')->group(function (): void {
@@ -28,6 +30,28 @@ function seedListUserEntry(int $userId, string $clientKey): void
 test('with no entries prints a friendly message', function (): void {
     test()->artisan('idempotency:list')
         ->expectsOutputToContain('No idempotent entries cached.')
+        ->assertExitCode(0);
+});
+
+test('lists entries from a non-locking cache store when used sequentially', function (): void {
+    $cache = new Repository(new NonLockingStore());
+    app()->instance('cache.store', $cache);
+    app()->forgetInstance(IdempotencyIndex::class);
+
+    app()->make(IdempotencyIndex::class)->remember(new IndexMember(
+        storageKey: 'hash-non-locking',
+        scope: IdempotencyScope::User,
+        identifier: '1',
+        clientKey: 'non-locking-key',
+        route: '/list/user',
+        method: 'POST',
+        status: 200,
+        createdAt: Carbon::now()->getTimestamp(),
+        expiresAt: Carbon::now()->addHour()->getTimestamp(),
+    ));
+
+    test()->artisan('idempotency:list')
+        ->expectsOutputToContain('non-locking-key')
         ->assertExitCode(0);
 });
 
