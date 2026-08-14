@@ -8,7 +8,9 @@
 
 ## Introduction
 
-Laravel Idempotency ships two Artisan commands to inspect and clear cached idempotent entries. Both commands read from the same cache store the middleware uses, so the driver must support atomic locks. In multi-server deployments, every application server must use the same shared cache backend. The `array` driver is only suitable for tests or single-process development. See Laravel's [atomic lock documentation](https://laravel.com/docs/cache#atomic-locks) for supported deployment options.
+Laravel Idempotency ships two Artisan commands to inspect and clear cached idempotent entries. The HTTP middleware requires a cache store that supports atomic locks. In multi-server deployments, every application server must use the same shared cache backend. The `array` driver is only suitable for tests or single-process development. See Laravel's [atomic lock documentation](https://laravel.com/docs/cache#atomic-locks) for supported deployment options.
+
+When `strict_index_locks` is disabled, the commands may use a non-locking store through the direct index fallback. Run only one direct index operation or maintenance command at a time with this fallback; concurrent use is unsupported. Enable `strict_index_locks` to fail fast instead. This fallback does not apply to middleware-managed HTTP requests.
 
 ## Concurrent maintenance
 

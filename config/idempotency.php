@@ -94,9 +94,9 @@ return [
     | Strict Index Locks
     |--------------------------------------------------------------------------
     |
-    | When enabled, maintenance index operations fail when the cache store does
-    | not support atomic locks. This remains disabled by default to preserve
-    | existing behavior for applications that use a non-locking cache store.
+     | When disabled, direct index and maintenance command use may run without
+     | atomic locks, but operations must be sequential. Enable this option to
+     | fail fast instead of allowing unsupported concurrent maintenance use.
     |
     */
     'strict_index_locks' => env('IDEMPOTENCY_STRICT_INDEX_LOCKS', false),

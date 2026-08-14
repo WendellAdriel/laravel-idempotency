@@ -160,4 +160,8 @@ The `strict_index_locks` option controls whether direct index and maintenance co
 'strict_index_locks' => env('IDEMPOTENCY_STRICT_INDEX_LOCKS', false),
 ```
 
-It is disabled by default to preserve existing behavior. Enable `IDEMPOTENCY_STRICT_INDEX_LOCKS=true` to fail fast instead of using the fallback for direct index and maintenance command use.
+It is disabled by default to preserve existing behavior. With the default setting, direct `IdempotencyIndex` use and [maintenance commands](../operations/maintenance-commands.md) may use a non-locking store when they run sequentially. Do not run concurrent direct index operations or maintenance commands against this fallback.
+
+The fallback does not apply to the HTTP middleware. Middleware-managed requests always require a cache store with atomic locks.
+
+Enable `IDEMPOTENCY_STRICT_INDEX_LOCKS=true` to fail fast instead of allowing sequential fallback use with a non-locking store.
