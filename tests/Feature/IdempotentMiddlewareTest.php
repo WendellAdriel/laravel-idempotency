@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Illuminate\Auth\GenericUser;
+use Illuminate\Cache\Repository;
 use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -11,7 +12,9 @@ use Illuminate\Routing\Redirector;
 use Illuminate\Support\Facades\Route;
 use WendellAdriel\Idempotency\Enums\IdempotencyScope;
 use WendellAdriel\Idempotency\Http\Middleware\Idempotent;
+use WendellAdriel\Idempotency\Support\IdempotencyCache;
 use WendellAdriel\Idempotency\Support\IdempotencyIndex;
+use WendellAdriel\Idempotency\Tests\Support\IndexLockTimeoutStore;
 
 beforeEach(function (): void {
     $noErrors = ['client_error' => false, 'server_error' => false];
@@ -137,6 +140,40 @@ test('same key and payload replays the response with a header', function (): voi
         ->assertOk()
         ->assertJson(['id' => 1])
         ->assertHeader('Idempotency-Replayed', 'true');
+});
+
+test('an index lock timeout preserves a successful cached response', function (): void {
+    $store = new IndexLockTimeoutStore();
+    $cache = new Repository($store);
+    $this->app->instance('cache.store', $cache);
+    $this->app->instance(Repository::class, $cache);
+    $this->app->forgetInstance(IdempotencyCache::class);
+    $this->app->forgetInstance(IdempotencyIndex::class);
+
+    $this->postJson('/orders', ['item' => 'widget'], ['Idempotency-Key' => 'key-timeout'])
+        ->assertOk()
+        ->assertJson(['id' => 1])
+        ->assertHeaderMissing('Idempotency-Replayed');
+
+    $this->postJson('/orders', ['item' => 'widget'], ['Idempotency-Key' => 'key-timeout'])
+        ->assertOk()
+        ->assertJson(['id' => 1])
+        ->assertHeader('Idempotency-Replayed', 'true');
+
+    $storageKey = hash('xxh128', implode('|', [
+        'orders.store',
+        'POST',
+        'ip:127.0.0.1',
+        'Idempotency-Key',
+        'key-timeout',
+    ]));
+
+    expect($this->controllerExecutionCount)->toBe(1)
+        ->and($cache->get('idempotent-response:' . $storageKey))->toBeArray()
+        ->and($cache->get('idempotent-index:ip:127.0.0.1'))->toBeNull()
+        ->and($cache->get(IdempotencyIndex::SCOPES_KEY))->toBeNull()
+        ->and($store->timedOutLocks)->toBe(['idempotent-index-lock:scope:ip:127.0.0.1'])
+        ->and($store->locks)->toBe([]);
 });
 
 test('replayed response preserves original status body and headers', function (): void {

@@ -6,7 +6,6 @@ use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Lock;
 use Illuminate\Cache\Repository;
 use Illuminate\Contracts\Cache\LockProvider;
-use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Contracts\Cache\Store;
 use Illuminate\Routing\Router;
@@ -16,6 +15,7 @@ use WendellAdriel\Idempotency\Enums\IdempotencyScope;
 use WendellAdriel\Idempotency\Http\Middleware\Idempotent;
 use WendellAdriel\Idempotency\Support\IdempotencyIndex;
 use WendellAdriel\Idempotency\Support\IndexMember;
+use WendellAdriel\Idempotency\Tests\Support\IndexLockTimeoutStore;
 
 beforeEach(function (): void {
     $this->cache = $this->app->make(Cache::class);
@@ -288,43 +288,21 @@ test('remember uses separate lease and wait durations for the index lock', funct
 });
 
 test('remember skips the index update when the lock cannot be acquired in time', function (): void {
-    $store = new class() extends ArrayStore
-    {
-        public function lock($name, $seconds = 0, $owner = null): Illuminate\Contracts\Cache\Lock
-        {
-            return new class($name, $seconds) extends Lock
-            {
-                public function acquire(): bool
-                {
-                    return true;
-                }
-
-                public function release(): bool
-                {
-                    return true;
-                }
-
-                public function forceRelease(): void {}
-
-                protected function getCurrentOwner(): string
-                {
-                    return $this->owner;
-                }
-
-                public function block($seconds, $callback = null): mixed
-                {
-                    throw new LockTimeoutException();
-                }
-            };
-        }
-    };
+    $store = new IndexLockTimeoutStore();
+    $existing = makeMember(['storageKey' => 'hash-existing']);
+    $entryKey = 'idempotent-index:user:5';
+    $store->put($entryKey, ['hash-existing' => $existing->toArray()], 3600);
+    $store->put(IdempotencyIndex::SCOPES_KEY, ['user:5' => $existing->expiresAt], 3600);
 
     $index = new IdempotencyIndex(new Repository($store));
 
-    $index->remember(makeMember());
+    $index->remember(makeMember(['storageKey' => 'hash-new']));
 
-    expect($store->get('idempotent-index:user:5'))->toBeNull()
-        ->and($store->get(IdempotencyIndex::SCOPES_KEY))->toBeNull();
+    expect($store)->toBeInstanceOf(LockProvider::class)
+        ->and($store->get($entryKey))->toBe(['hash-existing' => $existing->toArray()])
+        ->and($store->get(IdempotencyIndex::SCOPES_KEY))->toBe(['user:5' => $existing->expiresAt])
+        ->and($store->timedOutLocks)->toBe(['idempotent-index-lock:scope:user:5'])
+        ->and($store->locks)->toBe([]);
 });
 
 test('a non-locking cache store works by default', function (): void {
