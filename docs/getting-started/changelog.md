@@ -2,6 +2,13 @@
 
 Here's a quick overview of the new features in the latest major versions of the package.
 
+## 1.5.0
+
+* Fixed the maintenance index expiring before entries with longer TTLs.
+* Improved maintenance bookkeeping to coordinate concurrent index updates, process scopes independently, and keep successful responses replayable when an index lock times out.
+* Added the `strict_index_locks` option to fail fast when direct index or maintenance command use targets a cache store without atomic locks. The default still supports sequential fallback use.
+* Fixed streamed and binary file responses being replayed without their content by skipping caching when a response body cannot be captured.
+
 ## 1.4.0
 
 * Added configurable cache statuses for stored responses through the config file, route middleware options, and controller attributes.

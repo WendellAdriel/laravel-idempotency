@@ -38,7 +38,7 @@ Route::post('/orders', function (Request $request) {
 })->middleware(Idempotent::class);
 ```
 
-The first request runs normally and stores the response. A later request with the same key, scope, route, method, and payload receives the stored response with an `Idempotency-Replayed: true` header.
+The first request runs normally. The package stores the response when its status category is enabled and its content can be captured safely. A later request with the same key, scope, route, method, and payload receives the stored response with an `Idempotency-Replayed: true` header.
 
 If the same key is reused with different request data, the package returns `422 Unprocessable Entity`. If a matching request arrives while the first request is still running, the package returns `409 Conflict` with `Retry-After: 1`.
 
