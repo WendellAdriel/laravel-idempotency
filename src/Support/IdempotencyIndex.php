@@ -18,7 +18,9 @@ final readonly class IdempotencyIndex
 
     public const string ENTRY_PREFIX = 'idempotent-index:';
 
-    private const string LOCK_KEY = 'idempotent-index-lock';
+    private const string REGISTRY_LOCK_KEY = 'idempotent-index-lock';
+
+    private const string SCOPE_LOCK_PREFIX = self::REGISTRY_LOCK_KEY . ':scope:';
 
     private const int LOCK_LEASE = 60;
 
@@ -47,18 +49,17 @@ final readonly class IdempotencyIndex
 
     public function remember(IndexMember $member): void
     {
-        $this->withLockOrSkip(function () use ($member): void {
-            $entryKey = $this->entryKey($member->scope, $member->identifier);
-            $scopeMember = $this->scopeMember($member->scope, $member->identifier);
+        $scopeMember = $this->scopeMember($member->scope, $member->identifier);
+        $entryKey = $this->entryKey($member->scope, $member->identifier);
 
-            $entry = $this->loadEntry($entryKey);
-            $entry[$member->storageKey] = $member;
+        $this->withScopeLockOrSkip($scopeMember, function () use ($member, $entryKey, $scopeMember): void {
+            $this->withRegistryLockOrSkip(function () use ($member, $entryKey, $scopeMember): void {
+                $entry = $this->loadEntry($entryKey);
+                $entry[$member->storageKey] = $member;
 
-            $ttl = $this->remainingTtl($entry);
-
-            $this->cache->put($entryKey, $this->serializeEntry($entry), $ttl);
-
-            $this->updateScope($scopeMember, $entry);
+                $this->cache->put($entryKey, $this->serializeEntry($entry), $this->remainingTtl($entry));
+                $this->updateScope($scopeMember, $entry);
+            });
         });
     }
 
@@ -67,7 +68,9 @@ final readonly class IdempotencyIndex
      */
     public function forMember(IdempotencyScope $scope, string $identifier): array
     {
-        return $this->withLock(fn (): array => $this->forMemberWithoutLock($scope, $identifier));
+        $scopeMember = $this->scopeMember($scope, $identifier);
+
+        return $this->withScopeLock($scopeMember, fn (): array => $this->forMemberWithinScope($scope, $identifier, $scopeMember));
     }
 
     /**
@@ -75,110 +78,23 @@ final readonly class IdempotencyIndex
      */
     public function all(): array
     {
-        return $this->withLock(fn (): array => $this->allWithoutLock());
-    }
-
-    /**
-     * @return list<string>
-     */
-    public function forget(IdempotencyScope $scope, string $identifier): array
-    {
-        return $this->withLock(fn (): array => $this->forgetWithoutLock($scope, $identifier));
-    }
-
-    public function forgetMember(IdempotencyScope $scope, string $identifier, string $storageKey): bool
-    {
-        return $this->withLock(fn (): bool => $this->forgetMemberWithoutLock($scope, $identifier, $storageKey));
-    }
-
-    /**
-     * @return list<string>
-     */
-    public function forgetByClientKey(string $clientKey): array
-    {
-        return $this->withLock(fn (): array => $this->forgetByClientKeyWithoutLock($clientKey));
-    }
-
-    /**
-     * @return list<string>
-     */
-    public function flush(): array
-    {
-        return $this->withLock(fn (): array => $this->flushWithoutLock());
-    }
-
-    /**
-     * @return list<IndexMember>
-     */
-    private function forMemberWithoutLock(IdempotencyScope $scope, string $identifier): array
-    {
-        $entryKey = $this->entryKey($scope, $identifier);
-        $entry = $this->loadEntry($entryKey);
-
-        if ($entry === []) {
-            return [];
-        }
-
-        $active = $this->pruneExpired($entry);
-
-        if ($active === []) {
-            $this->cache->forget($entryKey);
-            $this->removeScope($this->scopeMember($scope, $identifier));
-
-            return [];
-        }
-
-        if (count($active) !== count($entry)) {
-            $this->cache->put($entryKey, $this->serializeEntry($active), $this->remainingTtl($active));
-            $this->updateScope($this->scopeMember($scope, $identifier), $active);
-        }
-
-        return array_values($active);
-    }
-
-    /**
-     * @return list<IndexMember>
-     */
-    private function allWithoutLock(): array
-    {
-        $scopes = $this->loadScopes();
+        $scopes = $this->withRegistryLock(fn (): array => $this->loadScopes());
         $all = [];
 
         foreach (array_keys($scopes) as $scopeMember) {
             $decoded = $this->splitScopeMember($scopeMember);
 
             if ($decoded === null) {
-                $this->removeScope($scopeMember);
+                $this->withRegistryLock(function () use ($scopeMember): void {
+                    $this->removeScope($scopeMember);
+                });
 
                 continue;
             }
 
             [$scope, $identifier] = $decoded;
-            $entryKey = $this->entryKey($scope, $identifier);
-            $entry = $this->loadEntry($entryKey);
 
-            if ($entry === []) {
-                $this->cache->forget($entryKey);
-                $this->removeScope($scopeMember);
-
-                continue;
-            }
-
-            $active = $this->pruneExpired($entry);
-
-            if ($active === []) {
-                $this->cache->forget($entryKey);
-                $this->removeScope($scopeMember);
-
-                continue;
-            }
-
-            if (count($active) !== count($entry)) {
-                $this->cache->put($entryKey, $this->serializeEntry($active), $this->remainingTtl($active));
-                $this->updateScope($scopeMember, $active);
-            }
-
-            foreach ($active as $member) {
+            foreach ($this->forMember($scope, $identifier) as $member) {
                 $all[] = $member;
             }
         }
@@ -189,26 +105,138 @@ final readonly class IdempotencyIndex
     /**
      * @return list<string>
      */
-    private function forgetWithoutLock(IdempotencyScope $scope, string $identifier): array
+    public function forget(IdempotencyScope $scope, string $identifier): array
+    {
+        $scopeMember = $this->scopeMember($scope, $identifier);
+
+        return $this->withScopeLock($scopeMember, fn (): array => $this->forgetWithinScope($scope, $identifier, $scopeMember));
+    }
+
+    public function forgetMember(IdempotencyScope $scope, string $identifier, string $storageKey): bool
+    {
+        $scopeMember = $this->scopeMember($scope, $identifier);
+
+        return $this->withScopeLock(
+            $scopeMember,
+            fn (): bool => $this->forgetMemberWithinScope($scope, $identifier, $storageKey, $scopeMember),
+        );
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function forgetByClientKey(string $clientKey): array
+    {
+        $scopes = $this->withRegistryLock(fn (): array => $this->loadScopes());
+        $removed = [];
+
+        foreach (array_keys($scopes) as $scopeMember) {
+            $decoded = $this->splitScopeMember($scopeMember);
+
+            if ($decoded === null) {
+                $this->withRegistryLock(function () use ($scopeMember): void {
+                    $this->removeScope($scopeMember);
+                });
+
+                continue;
+            }
+
+            [$scope, $identifier] = $decoded;
+            array_push($removed, ...$this->forgetByClientKeyWithinScope($scope, $identifier, $scopeMember, $clientKey));
+        }
+
+        return $removed;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function flush(): array
+    {
+        $scopes = $this->withRegistryLock(fn (): array => $this->loadScopes());
+        $removed = [];
+
+        foreach (array_keys($scopes) as $scopeMember) {
+            $decoded = $this->splitScopeMember($scopeMember);
+
+            if ($decoded === null) {
+                $this->withRegistryLock(function () use ($scopeMember): void {
+                    $this->removeScope($scopeMember);
+                });
+
+                continue;
+            }
+
+            [$scope, $identifier] = $decoded;
+            array_push($removed, ...$this->flushScope($scope, $identifier, $scopeMember));
+        }
+
+        return $removed;
+    }
+
+    /**
+     * @return list<IndexMember>
+     */
+    private function forMemberWithinScope(IdempotencyScope $scope, string $identifier, string $scopeMember): array
     {
         $entryKey = $this->entryKey($scope, $identifier);
         $entry = $this->loadEntry($entryKey);
 
         if ($entry === []) {
-            $this->removeScope($this->scopeMember($scope, $identifier));
+            return $this->withRegistryLock(function () use ($scopeMember): array {
+                $this->removeScope($scopeMember);
 
-            return [];
+                return [];
+            });
         }
 
-        $storageKeys = array_keys($entry);
-        $this->cache->forget($entryKey);
-        $this->removeScope($this->scopeMember($scope, $identifier));
+        $active = $this->pruneExpired($entry);
 
-        return $storageKeys;
+        if ($active === []) {
+            return $this->withRegistryLock(function () use ($entryKey, $scopeMember): array {
+                $this->cache->forget($entryKey);
+                $this->removeScope($scopeMember);
+
+                return [];
+            });
+        }
+
+        if (count($active) !== count($entry)) {
+            $this->withRegistryLock(function () use ($entryKey, $scopeMember, $active): void {
+                $this->cache->put($entryKey, $this->serializeEntry($active), $this->remainingTtl($active));
+                $this->updateScope($scopeMember, $active);
+            });
+        }
+
+        return array_values($active);
     }
 
-    private function forgetMemberWithoutLock(IdempotencyScope $scope, string $identifier, string $storageKey): bool
+    /** @return list<string> */
+    private function forgetWithinScope(IdempotencyScope $scope, string $identifier, string $scopeMember): array
     {
+        $entryKey = $this->entryKey($scope, $identifier);
+        $entry = $this->loadEntry($entryKey);
+
+        return $this->withRegistryLock(function () use ($entry, $entryKey, $scopeMember): array {
+            if ($entry === []) {
+                $this->removeScope($scopeMember);
+
+                return [];
+            }
+
+            $this->cache->forget($entryKey);
+            $this->removeScope($scopeMember);
+
+            return array_keys($entry);
+        });
+    }
+
+    private function forgetMemberWithinScope(
+        IdempotencyScope $scope,
+        string $identifier,
+        string $storageKey,
+        string $scopeMember,
+    ): bool {
         $entryKey = $this->entryKey($scope, $identifier);
         $entry = $this->loadEntry($entryKey);
 
@@ -218,102 +246,88 @@ final readonly class IdempotencyIndex
 
         unset($entry[$storageKey]);
 
-        if ($entry === []) {
-            $this->cache->forget($entryKey);
-            $this->removeScope($this->scopeMember($scope, $identifier));
-
-            return true;
-        }
-
-        $this->cache->put($entryKey, $this->serializeEntry($entry), $this->remainingTtl($entry));
-        $this->updateScope($this->scopeMember($scope, $identifier), $entry);
-
-        return true;
-    }
-
-    /**
-     * @return list<string>
-     */
-    private function forgetByClientKeyWithoutLock(string $clientKey): array
-    {
-        $removed = [];
-        $scopes = $this->loadScopes();
-
-        foreach (array_keys($scopes) as $scopeMember) {
-            $decoded = $this->splitScopeMember($scopeMember);
-
-            if ($decoded === null) {
-                $this->removeScope($scopeMember);
-
-                continue;
-            }
-
-            [$scope, $identifier] = $decoded;
-            $entryKey = $this->entryKey($scope, $identifier);
-            $entry = $this->loadEntry($entryKey);
-
-            if ($entry === []) {
-                $this->removeScope($scopeMember);
-
-                continue;
-            }
-
-            $mutated = false;
-            foreach ($entry as $storageKey => $member) {
-                if ($member->clientKey === $clientKey) {
-                    $removed[] = $storageKey;
-                    unset($entry[$storageKey]);
-                    $mutated = true;
-                }
-            }
-
-            if (! $mutated) {
-                continue;
-            }
-
+        return $this->withRegistryLock(function () use ($entry, $entryKey, $scopeMember): bool {
             if ($entry === []) {
                 $this->cache->forget($entryKey);
                 $this->removeScope($scopeMember);
 
-                continue;
+                return true;
             }
 
             $this->cache->put($entryKey, $this->serializeEntry($entry), $this->remainingTtl($entry));
             $this->updateScope($scopeMember, $entry);
-        }
 
-        return $removed;
+            return true;
+        });
     }
 
     /**
      * @return list<string>
      */
-    private function flushWithoutLock(): array
-    {
-        $scopes = $this->loadScopes();
-        $removed = [];
-
-        foreach (array_keys($scopes) as $scopeMember) {
-            $decoded = $this->splitScopeMember($scopeMember);
-
-            if ($decoded === null) {
-                continue;
-            }
-
-            [$scope, $identifier] = $decoded;
+    private function forgetByClientKeyWithinScope(
+        IdempotencyScope $scope,
+        string $identifier,
+        string $scopeMember,
+        string $clientKey,
+    ): array {
+        return $this->withScopeLock($scopeMember, function () use ($scope, $identifier, $scopeMember, $clientKey): array {
             $entryKey = $this->entryKey($scope, $identifier);
             $entry = $this->loadEntry($entryKey);
 
-            foreach (array_keys($entry) as $storageKey) {
-                $removed[] = $storageKey;
+            if ($entry === []) {
+                return $this->withRegistryLock(function () use ($scopeMember): array {
+                    $this->removeScope($scopeMember);
+
+                    return [];
+                });
             }
 
-            $this->cache->forget($entryKey);
-        }
+            $removed = [];
+            foreach ($entry as $storageKey => $member) {
+                if ($member->clientKey !== $clientKey) {
+                    continue;
+                }
 
-        $this->cache->forget(self::SCOPES_KEY);
+                $removed[] = $storageKey;
+                unset($entry[$storageKey]);
+            }
 
-        return $removed;
+            if ($removed === []) {
+                return [];
+            }
+
+            return $this->withRegistryLock(function () use ($entry, $entryKey, $scopeMember, $removed): array {
+                if ($entry === []) {
+                    $this->cache->forget($entryKey);
+                    $this->removeScope($scopeMember);
+
+                    return $removed;
+                }
+
+                $this->cache->put($entryKey, $this->serializeEntry($entry), $this->remainingTtl($entry));
+                $this->updateScope($scopeMember, $entry);
+
+                return $removed;
+            });
+        });
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function flushScope(IdempotencyScope $scope, string $identifier, string $scopeMember): array
+    {
+        return $this->withScopeLock($scopeMember, function () use ($scope, $identifier, $scopeMember): array {
+            $entryKey = $this->entryKey($scope, $identifier);
+            $entry = $this->loadEntry($entryKey);
+
+            return $this->withRegistryLock(function () use ($entry, $entryKey, $scopeMember): array {
+                $this->cache->forget($entryKey);
+                $this->removeScope($scopeMember);
+
+                return array_keys($entry);
+            });
+        });
     }
 
     private function entryKey(IdempotencyScope $scope, string $identifier): string
@@ -519,8 +533,25 @@ final readonly class IdempotencyIndex
         return Carbon::now()->getTimestamp();
     }
 
+    private function scopeLockKey(string $scopeMember): string
+    {
+        return self::SCOPE_LOCK_PREFIX . $scopeMember;
+    }
+
     /** @param Closure(): void $callback */
-    private function withLockOrSkip(Closure $callback): void
+    private function withScopeLockOrSkip(string $scopeMember, Closure $callback): void
+    {
+        $this->withLockOrSkip($this->scopeLockKey($scopeMember), $callback);
+    }
+
+    /** @param Closure(): void $callback */
+    private function withRegistryLockOrSkip(Closure $callback): void
+    {
+        $this->withLockOrSkip(self::REGISTRY_LOCK_KEY, $callback);
+    }
+
+    /** @param Closure(): void $callback */
+    private function withLockOrSkip(string $key, Closure $callback): void
     {
         if (! $this->store instanceof LockProvider) {
             $callback();
@@ -528,7 +559,7 @@ final readonly class IdempotencyIndex
             return;
         }
 
-        $lock = $this->store->lock(self::LOCK_KEY, self::LOCK_LEASE);
+        $lock = $this->store->lock($key, self::LOCK_LEASE);
 
         try {
             $lock->block(self::LOCK_WAIT);
@@ -549,12 +580,34 @@ final readonly class IdempotencyIndex
      * @param  Closure(): TReturn  $callback
      * @return TReturn
      */
-    private function withLock(Closure $callback): mixed
+    private function withScopeLock(string $scopeMember, Closure $callback): mixed
+    {
+        return $this->withLock($this->scopeLockKey($scopeMember), $callback);
+    }
+
+    /**
+     * @template TReturn
+     *
+     * @param  Closure(): TReturn  $callback
+     * @return TReturn
+     */
+    private function withRegistryLock(Closure $callback): mixed
+    {
+        return $this->withLock(self::REGISTRY_LOCK_KEY, $callback);
+    }
+
+    /**
+     * @template TReturn
+     *
+     * @param  Closure(): TReturn  $callback
+     * @return TReturn
+     */
+    private function withLock(string $key, Closure $callback): mixed
     {
         if (! $this->store instanceof LockProvider) {
             return $callback();
         }
 
-        return $this->store->lock(self::LOCK_KEY, self::LOCK_LEASE)->block(self::LOCK_WAIT, $callback);
+        return $this->store->lock($key, self::LOCK_LEASE)->block(self::LOCK_WAIT, $callback);
     }
 }
