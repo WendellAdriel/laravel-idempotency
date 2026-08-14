@@ -60,7 +60,10 @@ final class IdempotencyServiceProvider extends ServiceProvider
             /** @var Repository $cache */
             $cache = $app->make('cache.store');
 
-            return new IdempotencyIndex($cache);
+            return new IdempotencyIndex(
+                cache: $cache,
+                strictLocks: (bool) config('idempotency.strict_index_locks'),
+            );
         });
     }
 }

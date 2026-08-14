@@ -39,6 +39,79 @@ function makeMember(array $overrides = []): IndexMember
     ], $overrides));
 }
 
+final class NonLockingStore implements Store
+{
+    /** @var array<string, mixed> */
+    private array $items = [];
+
+    public function get($key): mixed
+    {
+        return $this->items[$key] ?? null;
+    }
+
+    public function many(array $keys): array
+    {
+        return array_map($this->get(...), array_combine($keys, $keys));
+    }
+
+    public function put($key, $value, $seconds): bool
+    {
+        $this->items[$key] = $value;
+
+        return true;
+    }
+
+    public function putMany(array $values, $seconds): bool
+    {
+        foreach ($values as $key => $value) {
+            $this->put($key, $value, $seconds);
+        }
+
+        return true;
+    }
+
+    public function increment($key, $value = 1): int
+    {
+        $this->items[$key] = (is_int($this->items[$key] ?? null) ? $this->items[$key] : 0) + $value;
+
+        return $this->items[$key];
+    }
+
+    public function decrement($key, $value = 1): int
+    {
+        return $this->increment($key, -$value);
+    }
+
+    public function forever($key, $value): bool
+    {
+        return $this->put($key, $value, 0);
+    }
+
+    public function touch($key, $seconds): bool
+    {
+        return true;
+    }
+
+    public function forget($key): bool
+    {
+        unset($this->items[$key]);
+
+        return true;
+    }
+
+    public function flush(): bool
+    {
+        $this->items = [];
+
+        return true;
+    }
+
+    public function getPrefix(): string
+    {
+        return '';
+    }
+}
+
 final class CooperativeLockStore extends ArrayStore
 {
     public bool $pauseOnEntryRead = false;
@@ -228,85 +301,33 @@ test('remember skips the index update when the lock cannot be acquired in time',
         ->and($store->get(IdempotencyIndex::SCOPES_KEY))->toBeNull();
 });
 
-test('requires a cache store that supports atomic locks for direct and maintenance use', function (): void {
-    $store = new class() implements Store
-    {
-        /** @var array<string, mixed> */
-        private array $items = [];
-
-        public function get($key): mixed
-        {
-            return $this->items[$key] ?? null;
-        }
-
-        public function many(array $keys): array
-        {
-            return array_map($this->get(...), array_combine($keys, $keys));
-        }
-
-        public function put($key, $value, $seconds): bool
-        {
-            $this->items[$key] = $value;
-
-            return true;
-        }
-
-        public function putMany(array $values, $seconds): bool
-        {
-            foreach ($values as $key => $value) {
-                $this->put($key, $value, $seconds);
-            }
-
-            return true;
-        }
-
-        public function increment($key, $value = 1): int
-        {
-            $this->items[$key] = (is_int($this->items[$key] ?? null) ? $this->items[$key] : 0) + $value;
-
-            return $this->items[$key];
-        }
-
-        public function decrement($key, $value = 1): int
-        {
-            return $this->increment($key, -$value);
-        }
-
-        public function forever($key, $value): bool
-        {
-            return $this->put($key, $value, 0);
-        }
-
-        public function touch($key, $seconds): bool
-        {
-            return true;
-        }
-
-        public function forget($key): bool
-        {
-            unset($this->items[$key]);
-
-            return true;
-        }
-
-        public function flush(): bool
-        {
-            $this->items = [];
-
-            return true;
-        }
-
-        public function getPrefix(): string
-        {
-            return '';
-        }
-    };
+test('a non-locking cache store works by default', function (): void {
+    $store = new NonLockingStore();
 
     expect($store)->not->toBeInstanceOf(LockProvider::class);
 
-    expect(fn (): IdempotencyIndex => new IdempotencyIndex(new Repository($store)))
+    $index = new IdempotencyIndex(new Repository($store));
+    $index->remember(makeMember(['storageKey' => 'hash-a']));
+    $index->remember(makeMember(['storageKey' => 'hash-b']));
+
+    $members = $index->forMember(IdempotencyScope::User, '5');
+    $keys = array_map(fn (IndexMember $member): string => $member->storageKey, $members);
+    sort($keys);
+
+    $this->app->instance('cache.store', new Repository($store));
+    $this->app->forgetInstance(IdempotencyIndex::class);
+
+    expect($keys)->toBe(['hash-a', 'hash-b'])
+        ->and(Artisan::call('idempotency:list'))->toBe(0);
+});
+
+test('strict index locks reject a non-locking cache store for direct and maintenance use', function (): void {
+    $store = new NonLockingStore();
+
+    expect(fn (): IdempotencyIndex => new IdempotencyIndex(new Repository($store), strictLocks: true))
         ->toThrow(LogicException::class, 'The configured cache store does not support atomic locks.');
 
+    config()->set('idempotency.strict_index_locks', true);
     $this->app->instance('cache.store', new Repository($store));
     $this->app->forgetInstance(IdempotencyIndex::class);
 

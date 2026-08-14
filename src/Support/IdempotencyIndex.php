@@ -24,15 +24,22 @@ final readonly class IdempotencyIndex
 
     private const int LOCK_WAIT = 5;
 
-    private LockProvider $store;
+    private ?LockProvider $store;
 
     public function __construct(
         private Repository $cache,
+        bool $strictLocks = false,
     ) {
         $store = $this->cache->getStore();
 
         if (! $store instanceof LockProvider) {
-            throw new LogicException('The configured cache store does not support atomic locks.');
+            if ($strictLocks) {
+                throw new LogicException('The configured cache store does not support atomic locks.');
+            }
+
+            $this->store = null;
+
+            return;
         }
 
         $this->store = $store;
@@ -515,6 +522,12 @@ final readonly class IdempotencyIndex
     /** @param Closure(): void $callback */
     private function withLockOrSkip(Closure $callback): void
     {
+        if (! $this->store instanceof LockProvider) {
+            $callback();
+
+            return;
+        }
+
         $lock = $this->store->lock(self::LOCK_KEY, self::LOCK_LEASE);
 
         try {
@@ -538,6 +551,10 @@ final readonly class IdempotencyIndex
      */
     private function withLock(Closure $callback): mixed
     {
+        if (! $this->store instanceof LockProvider) {
+            return $callback();
+        }
+
         return $this->store->lock(self::LOCK_KEY, self::LOCK_LEASE)->block(self::LOCK_WAIT, $callback);
     }
 }

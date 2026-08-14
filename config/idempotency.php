@@ -88,4 +88,16 @@ return [
     |
     */
     'lock_timeout' => env('IDEMPOTENCY_LOCK_TIMEOUT', 10),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Strict Index Locks
+    |--------------------------------------------------------------------------
+    |
+    | When enabled, maintenance index operations fail when the cache store does
+    | not support atomic locks. This remains disabled by default to preserve
+    | existing behavior for applications that use a non-locking cache store.
+    |
+    */
+    'strict_index_locks' => env('IDEMPOTENCY_STRICT_INDEX_LOCKS', false),
 ];
