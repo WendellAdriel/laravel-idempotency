@@ -13,7 +13,7 @@
 
 Laravel Idempotency helps you safely retry write-oriented HTTP requests without performing the same work twice. When a `POST`, `PUT`, or `PATCH` request is sent again with the same idempotency key and the same request data, the package replays the original response instead of executing your route again.
 
-The package stores responses and acquires in-flight locks through Laravel's cache system. Use a cache driver that supports atomic locks.
+The package stores responses and acquires in-flight locks through Laravel's cache system. Use a cache driver that supports atomic locks. In multi-server deployments, every application server must use the same shared cache backend. The `array` driver is only suitable for tests or single-process development. See Laravel's [atomic lock documentation](https://laravel.com/docs/cache#atomic-locks) for supported deployment options.
 
 ## When to use Laravel Idempotency
 
