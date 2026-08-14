@@ -2,6 +2,7 @@
 
 - [Introduction](#introduction)
 - [Concurrent maintenance](#concurrent-maintenance)
+- [Best-effort index bookkeeping](#best-effort-index-bookkeeping)
 - [Listing cached entries](#listing-cached-entries)
 - [Forgetting cached entries](#forgetting-cached-entries)
 
@@ -14,6 +15,12 @@ Laravel Idempotency ships two Artisan commands to inspect and clear cached idemp
 Commands that visit several scopes process one scope at a time instead of holding a single lock for the entire index. This lets requests continue writing entries for other scopes while a listing or bulk removal is running.
 
 An entry written after a command has processed its scope may remain cached and can be listed or removed by a later command invocation. This boundary applies only to maintenance command results; it does not change the idempotent request-response guarantee.
+
+## Best-effort index bookkeeping
+
+The middleware stores a cacheable response before it updates the maintenance index. If an index lock times out during exceptional contention, it skips only that bookkeeping update. The original request still returns its successful response, and later requests with the same idempotency key replay the cached response normally.
+
+Because the response is absent from the maintenance index, `idempotency:list` does not show it and `idempotency:forget` cannot remove it. The response expires normally according to its configured idempotency TTL. This is separate from the concurrent maintenance boundary above, where an entry is written after a command has processed its scope.
 
 ## Listing cached entries
 
