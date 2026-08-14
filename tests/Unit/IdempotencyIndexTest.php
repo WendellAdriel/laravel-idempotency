@@ -116,8 +116,14 @@ final class CooperativeLockStore extends ArrayStore
 {
     public bool $pauseOnEntryRead = false;
 
+    /** @var array<string, int> */
+    public array $pauseAfterLockAcquisition = [];
+
     /** @var array<string, string> */
     public array $lockOwners = [];
+
+    /** @var list<string> */
+    public array $lockEvents = [];
 
     /** @var list<int> */
     public array $leaseSeconds = [];
@@ -150,6 +156,24 @@ final class CooperativeLockStore extends ArrayStore
 
         return new CooperativeLock($this, $name, $seconds, $owner);
     }
+
+    public function acquired(string $name): void
+    {
+        $this->lockEvents[] = 'acquired:' . $name;
+
+        if (($this->pauseAfterLockAcquisition[$name] ?? 0) <= 0 || ! Fiber::getCurrent() instanceof Fiber) {
+            return;
+        }
+
+        $this->pauseAfterLockAcquisition[$name]--;
+
+        Fiber::suspend();
+    }
+
+    public function released(string $name): void
+    {
+        $this->lockEvents[] = 'released:' . $name;
+    }
 }
 
 final class CooperativeLock extends Lock
@@ -170,6 +194,7 @@ final class CooperativeLock extends Lock
         }
 
         $this->store->lockOwners[$this->name] = $this->owner;
+        $this->store->acquired($this->name);
 
         return true;
     }
@@ -181,6 +206,7 @@ final class CooperativeLock extends Lock
         }
 
         unset($this->store->lockOwners[$this->name]);
+        $this->store->released($this->name);
 
         return true;
     }
@@ -257,8 +283,8 @@ test('remember uses separate lease and wait durations for the index lock', funct
     $index = new IdempotencyIndex(new Repository($store));
     $index->remember(makeMember());
 
-    expect($store->leaseSeconds)->toBe([60])
-        ->and($store->waitSeconds)->toBe([5]);
+    expect($store->leaseSeconds)->toBe([60, 60])
+        ->and($store->waitSeconds)->toBe([5, 5]);
 });
 
 test('remember skips the index update when the lock cannot be acquired in time', function (): void {
@@ -399,6 +425,87 @@ test('concurrent remembers for different scopes preserve both scope pointers', f
         ->and($keys)->toBe(['hash-ip', 'hash-user']);
 });
 
+test('all releases the registry lock before acquiring a scope lock', function (): void {
+    $store = new CooperativeLockStore();
+    $index = new IdempotencyIndex(new Repository($store));
+    $index->remember(makeMember(['storageKey' => 'hash-user']));
+    $store->lockEvents = [];
+
+    $index->all();
+
+    $registryRelease = array_search('released:idempotent-index-lock', $store->lockEvents, true);
+    $firstScopeLock = array_search('acquired:idempotent-index-lock:scope:user:5', $store->lockEvents, true);
+
+    expect($registryRelease)->toBeInt()
+        ->and($firstScopeLock)->toBeInt()
+        ->and($registryRelease)->toBeLessThan($firstScopeLock)
+        ->and($store->lockOwners)->toBe([]);
+});
+
+test('all processes scopes independently while a different scope is written', function (): void {
+    $store = new CooperativeLockStore();
+    $index = new IdempotencyIndex(new Repository($store));
+    $index->remember(makeMember(['storageKey' => 'hash-5']));
+    $index->remember(makeMember(['storageKey' => 'hash-6', 'identifier' => '6']));
+    $store->pauseAfterLockAcquisition['idempotent-index-lock:scope:user:5'] = 1;
+
+    $all = new Fiber(fn (): array => $index->all());
+    $remember = new Fiber(fn () => $index->remember(makeMember([
+        'storageKey' => 'hash-7',
+        'identifier' => '7',
+    ])));
+
+    $all->start();
+    $remember->start();
+
+    expect($all->isSuspended())->toBeTrue()
+        ->and($remember->isTerminated())->toBeTrue();
+
+    $all->resume();
+
+    expect($all->isTerminated())->toBeTrue()
+        ->and($index->forMember(IdempotencyScope::User, '7'))->toHaveCount(1)
+        ->and($store->lockOwners)->toBe([]);
+});
+
+test('all cleans expired and malformed scope pointers without removing a concurrent scope write', function (): void {
+    Carbon::setTestNow('2026-01-01 00:00:00');
+
+    try {
+        $store = new CooperativeLockStore();
+        $index = new IdempotencyIndex(new Repository($store));
+        $now = Carbon::now()->getTimestamp();
+        $expired = makeMember(['storageKey' => 'hash-expired', 'expiresAt' => $now - 1]);
+        $store->forever('idempotent-index:user:5', ['hash-expired' => $expired->toArray()]);
+        $store->forever(IdempotencyIndex::SCOPES_KEY, [
+            'malformed' => $now + 3600,
+            'user:5' => $now - 1,
+        ]);
+        $store->pauseAfterLockAcquisition['idempotent-index-lock:scope:user:5'] = 1;
+
+        $all = new Fiber(fn (): array => $index->all());
+        $remember = new Fiber(fn () => $index->remember(makeMember([
+            'storageKey' => 'hash-new',
+            'identifier' => '6',
+        ])));
+
+        $all->start();
+        $remember->start();
+
+        expect($all->isSuspended())->toBeTrue()
+            ->and($remember->isTerminated())->toBeTrue();
+
+        $all->resume();
+
+        expect($all->isTerminated())->toBeTrue()
+            ->and($store->get(IdempotencyIndex::SCOPES_KEY))->toHaveKey('user:6')
+            ->and($store->get(IdempotencyIndex::SCOPES_KEY))->not->toHaveKeys(['malformed', 'user:5'])
+            ->and($store->lockOwners)->toBe([]);
+    } finally {
+        Carbon::setTestNow();
+    }
+});
+
 test('concurrent forget and remember calls do not restore a forgotten member', function (): void {
     $store = new CooperativeLockStore();
     $index = new IdempotencyIndex(new Repository($store));
@@ -441,13 +548,93 @@ test('concurrent forget and remember calls preserve other scope pointers', funct
     $remember->start();
     $forget->resume();
     $remember->resume();
-    $remember->resume();
+    $forget->resume();
 
     expect($forget->isTerminated())->toBeTrue()
         ->and($remember->isTerminated())->toBeTrue()
         ->and($store->get(IdempotencyIndex::SCOPES_KEY))->toBeArray()
         ->and($store->get(IdempotencyIndex::SCOPES_KEY))->toHaveKey('user:6')
         ->and($store->get(IdempotencyIndex::SCOPES_KEY))->not->toHaveKey('user:5');
+});
+
+test('forgetByClientKey processes scopes independently while a different scope is written', function (): void {
+    $store = new CooperativeLockStore();
+    $index = new IdempotencyIndex(new Repository($store));
+    $index->remember(makeMember(['storageKey' => 'hash-5', 'clientKey' => 'target']));
+    $index->remember(makeMember(['storageKey' => 'hash-6', 'identifier' => '6', 'clientKey' => 'target']));
+    $store->pauseAfterLockAcquisition['idempotent-index-lock:scope:user:5'] = 1;
+
+    $forget = new Fiber(fn (): array => $index->forgetByClientKey('target'));
+    $remember = new Fiber(fn () => $index->remember(makeMember([
+        'storageKey' => 'hash-7',
+        'identifier' => '7',
+    ])));
+
+    $forget->start();
+    $remember->start();
+
+    expect($forget->isSuspended())->toBeTrue()
+        ->and($remember->isTerminated())->toBeTrue();
+
+    $forget->resume();
+
+    expect($forget->isTerminated())->toBeTrue()
+        ->and($forget->getReturn())->toBe(['hash-5', 'hash-6'])
+        ->and($index->forMember(IdempotencyScope::User, '7'))->toHaveCount(1)
+        ->and($store->lockOwners)->toBe([]);
+});
+
+test('flush preserves writes to processed and newly added scopes', function (): void {
+    $store = new CooperativeLockStore();
+    $index = new IdempotencyIndex(new Repository($store));
+    $index->remember(makeMember(['storageKey' => 'hash-old-5']));
+    $index->remember(makeMember(['storageKey' => 'hash-old-6', 'identifier' => '6']));
+    $store->pauseAfterLockAcquisition['idempotent-index-lock:scope:user:6'] = 1;
+
+    $flush = new Fiber(fn (): array => $index->flush());
+    $flush->start();
+
+    expect($flush->isSuspended())->toBeTrue();
+
+    $index->remember(makeMember(['storageKey' => 'hash-new-5']));
+    $index->remember(makeMember(['storageKey' => 'hash-new-7', 'identifier' => '7']));
+
+    $flush->resume();
+    $userFiveMembers = $index->forMember(IdempotencyScope::User, '5');
+    $userSevenMembers = $index->forMember(IdempotencyScope::User, '7');
+
+    expect($flush->isTerminated())->toBeTrue()
+        ->and($flush->getReturn())->toBe(['hash-old-5', 'hash-old-6'])
+        ->and($userFiveMembers)->toHaveCount(1)
+        ->and($userFiveMembers[0]->storageKey)->toBe('hash-new-5')
+        ->and($index->forMember(IdempotencyScope::User, '6'))->toBe([])
+        ->and($userSevenMembers)->toHaveCount(1)
+        ->and($userSevenMembers[0]->storageKey)->toBe('hash-new-7')
+        ->and($store->lockOwners)->toBe([]);
+});
+
+test('forgetByClientKey preserves a matching write after its scope is processed', function (): void {
+    $store = new CooperativeLockStore();
+    $index = new IdempotencyIndex(new Repository($store));
+    $index->remember(makeMember(['storageKey' => 'hash-old-5', 'clientKey' => 'target']));
+    $index->remember(makeMember(['storageKey' => 'hash-old-6', 'identifier' => '6', 'clientKey' => 'target']));
+    $store->pauseAfterLockAcquisition['idempotent-index-lock:scope:user:6'] = 1;
+
+    $forget = new Fiber(fn (): array => $index->forgetByClientKey('target'));
+    $forget->start();
+
+    expect($forget->isSuspended())->toBeTrue();
+
+    $index->remember(makeMember(['storageKey' => 'hash-new-5', 'clientKey' => 'target']));
+
+    $forget->resume();
+    $members = $index->forMember(IdempotencyScope::User, '5');
+
+    expect($forget->isTerminated())->toBeTrue()
+        ->and($forget->getReturn())->toBe(['hash-old-5', 'hash-old-6'])
+        ->and($members)->toHaveCount(1)
+        ->and($members[0]->storageKey)->toBe('hash-new-5')
+        ->and($store->lockOwners)->toBe([]);
 });
 
 test('all pruning an expired scope preserves a concurrent scope write', function (): void {
@@ -475,7 +662,7 @@ test('all pruning an expired scope preserves a concurrent scope write', function
         $remember->start();
         $all->resume();
         $remember->resume();
-        $remember->resume();
+        $all->resume();
 
         $members = $index->all();
 
