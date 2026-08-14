@@ -9,6 +9,7 @@ use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Support\Carbon;
+use LogicException;
 use WendellAdriel\Idempotency\Enums\IdempotencyScope;
 
 final readonly class IdempotencyIndex
@@ -23,9 +24,26 @@ final readonly class IdempotencyIndex
 
     private const int LOCK_WAIT = 5;
 
+    private ?LockProvider $store;
+
     public function __construct(
         private Repository $cache,
-    ) {}
+        bool $strictLocks = false,
+    ) {
+        $store = $this->cache->getStore();
+
+        if (! $store instanceof LockProvider) {
+            if ($strictLocks) {
+                throw new LogicException('The configured cache store does not support atomic locks.');
+            }
+
+            $this->store = null;
+
+            return;
+        }
+
+        $this->store = $store;
+    }
 
     public function remember(IndexMember $member): void
     {
@@ -504,15 +522,13 @@ final readonly class IdempotencyIndex
     /** @param Closure(): void $callback */
     private function withLockOrSkip(Closure $callback): void
     {
-        $store = $this->cache->getStore();
-
-        if (! $store instanceof LockProvider) {
+        if (! $this->store instanceof LockProvider) {
             $callback();
 
             return;
         }
 
-        $lock = $store->lock(self::LOCK_KEY, self::LOCK_LEASE);
+        $lock = $this->store->lock(self::LOCK_KEY, self::LOCK_LEASE);
 
         try {
             $lock->block(self::LOCK_WAIT);
@@ -535,12 +551,10 @@ final readonly class IdempotencyIndex
      */
     private function withLock(Closure $callback): mixed
     {
-        $store = $this->cache->getStore();
-
-        if (! $store instanceof LockProvider) {
+        if (! $this->store instanceof LockProvider) {
             return $callback();
         }
 
-        return $store->lock(self::LOCK_KEY, self::LOCK_LEASE)->block(self::LOCK_WAIT, $callback);
+        return $this->store->lock(self::LOCK_KEY, self::LOCK_LEASE)->block(self::LOCK_WAIT, $callback);
     }
 }

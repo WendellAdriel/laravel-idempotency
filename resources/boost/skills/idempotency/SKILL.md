@@ -22,7 +22,7 @@ Use this skill when a Laravel application needs retry-safe write requests, idemp
 - confirm the app is a Laravel project
 - inspect the target routes or controllers that create or update data
 - identify whether the endpoint is better served by route middleware or a controller attribute
-- inspect the app cache driver when idempotency will be enabled in production, since atomic locks are required
+- inspect the app cache driver before enabling idempotency, since it must support atomic locks and be shared by every application server
 
 ### 2. Install and publish configuration when needed
 
@@ -34,6 +34,7 @@ Use this skill when a Laravel application needs retry-safe write requests, idemp
   - `idempotency.scope`
   - `idempotency.header`
   - `idempotency.input`
+  - `idempotency.strict_index_locks`
 
 ### 3. Choose the integration style
 
@@ -179,4 +180,5 @@ Read before executing:
 - do not apply idempotency to read-only routes
 - do not suggest unsupported scope values beyond `user`, `ip`, and `global`
 - do not document package maintenance tasks here; keep the skill focused on package adoption in Laravel apps
-- do not assume every production cache driver supports atomic locks without checking
+- do not assume every cache driver supports atomic locks without checking
+- do not use the `array` driver outside tests or single-process development

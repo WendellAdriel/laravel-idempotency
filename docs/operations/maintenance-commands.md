@@ -6,7 +6,7 @@
 
 ## Introduction
 
-Laravel Idempotency ships two Artisan commands to inspect and clear cached idempotent entries. Both commands read from the same cache store the middleware uses, so the driver must support atomic locks in production.
+Laravel Idempotency ships two Artisan commands to inspect and clear cached idempotent entries. Both commands read from the same cache store the middleware uses, so the driver must support atomic locks. In multi-server deployments, every application server must use the same shared cache backend. The `array` driver is only suitable for tests or single-process development. See Laravel's [atomic lock documentation](https://laravel.com/docs/cache#atomic-locks) for supported deployment options.
 
 ## Listing cached entries
 
