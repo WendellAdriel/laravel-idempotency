@@ -40,12 +40,7 @@ final readonly class IdempotencyIndex
 
             $this->cache->put($entryKey, $this->serializeEntry($entry), $ttl);
 
-            $scopes = $this->loadScopes();
-            if (! in_array($scopeMember, $scopes, true)) {
-                $scopes[] = $scopeMember;
-            }
-
-            $this->cache->forever(self::SCOPES_KEY, $scopes);
+            $this->updateScope($scopeMember, $entry);
         });
     }
 
@@ -117,6 +112,7 @@ final readonly class IdempotencyIndex
 
         if (count($active) !== count($entry)) {
             $this->cache->put($entryKey, $this->serializeEntry($active), $this->remainingTtl($active));
+            $this->updateScope($this->scopeMember($scope, $identifier), $active);
         }
 
         return array_values($active);
@@ -130,7 +126,7 @@ final readonly class IdempotencyIndex
         $scopes = $this->loadScopes();
         $all = [];
 
-        foreach ($scopes as $scopeMember) {
+        foreach (array_keys($scopes) as $scopeMember) {
             $decoded = $this->splitScopeMember($scopeMember);
 
             if ($decoded === null) {
@@ -161,6 +157,7 @@ final readonly class IdempotencyIndex
 
             if (count($active) !== count($entry)) {
                 $this->cache->put($entryKey, $this->serializeEntry($active), $this->remainingTtl($active));
+                $this->updateScope($scopeMember, $active);
             }
 
             foreach ($active as $member) {
@@ -211,6 +208,7 @@ final readonly class IdempotencyIndex
         }
 
         $this->cache->put($entryKey, $this->serializeEntry($entry), $this->remainingTtl($entry));
+        $this->updateScope($this->scopeMember($scope, $identifier), $entry);
 
         return true;
     }
@@ -223,7 +221,7 @@ final readonly class IdempotencyIndex
         $removed = [];
         $scopes = $this->loadScopes();
 
-        foreach ($scopes as $scopeMember) {
+        foreach (array_keys($scopes) as $scopeMember) {
             $decoded = $this->splitScopeMember($scopeMember);
 
             if ($decoded === null) {
@@ -263,6 +261,7 @@ final readonly class IdempotencyIndex
             }
 
             $this->cache->put($entryKey, $this->serializeEntry($entry), $this->remainingTtl($entry));
+            $this->updateScope($scopeMember, $entry);
         }
 
         return $removed;
@@ -276,7 +275,7 @@ final readonly class IdempotencyIndex
         $scopes = $this->loadScopes();
         $removed = [];
 
-        foreach ($scopes as $scopeMember) {
+        foreach (array_keys($scopes) as $scopeMember) {
             $decoded = $this->splitScopeMember($scopeMember);
 
             if ($decoded === null) {
@@ -334,7 +333,7 @@ final readonly class IdempotencyIndex
     }
 
     /**
-     * @return list<string>
+     * @return array<string, int>
      */
     private function loadScopes(): array
     {
@@ -344,25 +343,74 @@ final readonly class IdempotencyIndex
             return [];
         }
 
-        return array_values(array_filter($stored, is_string(...)));
+        $scopes = [];
+        $legacy = false;
+
+        foreach ($stored as $scopeMember => $expiresAt) {
+            if (is_string($scopeMember) && is_int($expiresAt)) {
+                $scopes[$scopeMember] = $expiresAt;
+
+                continue;
+            }
+
+            if (! is_string($expiresAt)) {
+                continue;
+            }
+
+            $legacy = true;
+            $entry = $this->loadEntry(self::ENTRY_PREFIX . $expiresAt);
+
+            if ($entry !== []) {
+                $scopes[$expiresAt] = $this->latestExpiration($entry);
+            }
+        }
+
+        if ($legacy) {
+            $this->storeScopes($scopes);
+        }
+
+        return $scopes;
+    }
+
+    /**
+     * @param  array<string, IndexMember>  $entry
+     */
+    private function updateScope(string $scopeMember, array $entry): void
+    {
+        $scopes = $this->loadScopes();
+        $scopes[$scopeMember] = $this->latestExpiration($entry);
+
+        $this->storeScopes($scopes);
     }
 
     private function removeScope(string $scopeMember): void
     {
         $scopes = $this->loadScopes();
-        $filtered = array_values(array_filter($scopes, static fn (string $member): bool => $member !== $scopeMember));
 
-        if ($filtered === []) {
+        if (! array_key_exists($scopeMember, $scopes)) {
+            return;
+        }
+
+        unset($scopes[$scopeMember]);
+
+        $this->storeScopes($scopes);
+    }
+
+    /**
+     * @param  array<string, int>  $scopes
+     */
+    private function storeScopes(array $scopes): void
+    {
+        $now = $this->now();
+        $active = array_filter($scopes, static fn (int $expiresAt): bool => $expiresAt > $now);
+
+        if ($active === []) {
             $this->cache->forget(self::SCOPES_KEY);
 
             return;
         }
 
-        if (count($filtered) === count($scopes)) {
-            return;
-        }
-
-        $this->cache->forever(self::SCOPES_KEY, $filtered);
+        $this->cache->put(self::SCOPES_KEY, $active, max($active) - $now);
     }
 
     /**
@@ -429,14 +477,23 @@ final readonly class IdempotencyIndex
      */
     private function remainingTtl(array $entry): int
     {
-        $max = 0;
+        return max(1, $this->latestExpiration($entry) - $this->now());
+    }
+
+    /**
+     * @param  array<string, IndexMember>  $entry
+     */
+    private function latestExpiration(array $entry): int
+    {
+        $latest = 0;
+
         foreach ($entry as $member) {
-            if ($member->expiresAt > $max) {
-                $max = $member->expiresAt;
+            if ($member->expiresAt > $latest) {
+                $latest = $member->expiresAt;
             }
         }
 
-        return max(1, $max - $this->now());
+        return $latest;
     }
 
     private function now(): int

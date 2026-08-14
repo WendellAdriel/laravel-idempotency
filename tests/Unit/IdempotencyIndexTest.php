@@ -152,7 +152,7 @@ test('remember stores a user member and registers the scope', function (): void 
 
     $scopes = $this->cache->get('idempotent-index:scopes');
     expect($scopes)->toBeArray()
-        ->and($scopes)->toContain('user:5');
+        ->and($scopes)->toHaveKey('user:5');
 });
 
 test('remember stores a global member with empty identifier and registers global scope', function (): void {
@@ -167,7 +167,7 @@ test('remember stores a global member with empty identifier and registers global
         ->and($stored)->toHaveKey('hash-g');
 
     $scopes = $this->cache->get('idempotent-index:scopes');
-    expect($scopes)->toContain('global');
+    expect($scopes)->toHaveKey('global');
 });
 
 test('remember called twice with the same storage key replaces the previous member', function (): void {
@@ -445,7 +445,7 @@ test('forget removes all members for a scope and returns their storage keys', fu
         ->and($this->cache->get('idempotent-index:user:5'))->toBeNull();
 
     $scopes = $this->cache->get('idempotent-index:scopes');
-    expect($scopes ?? [])->not->toContain('user:5');
+    expect($scopes ?? [])->not->toHaveKey('user:5');
 });
 
 test('forgetMember removes exactly one member and leaves siblings intact', function (): void {
@@ -459,6 +459,28 @@ test('forgetMember removes exactly one member and leaves siblings intact', funct
     $members = $this->index->forMember(IdempotencyScope::User, '5');
     expect($members)->toHaveCount(1)
         ->and($members[0]->storageKey)->toBe('hash-b');
+});
+
+test('forgetMember shortens the scopes registry ttl to the remaining members', function (): void {
+    Carbon::setTestNow('2026-01-01 00:00:00');
+    $now = Carbon::now()->getTimestamp();
+
+    $this->index->remember(makeMember([
+        'storageKey' => 'hash-short',
+        'expiresAt' => $now + 60,
+    ]));
+    $this->index->remember(makeMember([
+        'storageKey' => 'hash-long',
+        'expiresAt' => $now + 3600,
+    ]));
+
+    $this->index->forgetMember(IdempotencyScope::User, '5', 'hash-long');
+
+    Carbon::setTestNow(Carbon::parse('2026-01-01 00:00:00')->addSeconds(120));
+
+    expect($this->cache->get(IdempotencyIndex::SCOPES_KEY))->toBeNull();
+
+    Carbon::setTestNow();
 });
 
 test('forgetByClientKey removes every matching member across scopes', function (): void {
@@ -557,8 +579,87 @@ test('scopes registry outlives shorter entries while longer entries remain activ
     expect($members)->toHaveCount(1)
         ->and($members[0]->storageKey)->toBe('hash-long')
         ->and($this->cache->get(IdempotencyIndex::SCOPES_KEY))
-        ->toContain('user:5')
-        ->not->toContain('user:6');
+        ->toHaveKey('user:5')
+        ->not->toHaveKey('user:6');
+
+    Carbon::setTestNow();
+});
+
+test('remember prunes expired scope pointers during normal writes', function (): void {
+    Carbon::setTestNow('2026-01-01 00:00:00');
+    $now = Carbon::now()->getTimestamp();
+
+    $this->index->remember(makeMember([
+        'storageKey' => 'hash-expiring-5',
+        'identifier' => '5',
+        'expiresAt' => $now + 60,
+    ]));
+    $this->index->remember(makeMember([
+        'storageKey' => 'hash-expiring-6',
+        'identifier' => '6',
+        'expiresAt' => $now + 60,
+    ]));
+
+    Carbon::setTestNow(Carbon::parse('2026-01-01 00:00:00')->addSeconds(120));
+    $later = Carbon::now()->getTimestamp();
+
+    $this->index->remember(makeMember([
+        'storageKey' => 'hash-active',
+        'identifier' => '7',
+        'createdAt' => $later,
+        'expiresAt' => $later + 3600,
+    ]));
+
+    expect($this->cache->get(IdempotencyIndex::SCOPES_KEY))->toBe([
+        'user:7' => $later + 3600,
+    ]);
+
+    Carbon::setTestNow();
+});
+
+test('remember migrates a legacy scopes registry without hiding live entries', function (): void {
+    Carbon::setTestNow('2026-01-01 00:00:00');
+    $now = Carbon::now()->getTimestamp();
+
+    $this->index->remember(makeMember([
+        'storageKey' => 'hash-long',
+        'identifier' => '5',
+        'expiresAt' => $now + 3600,
+    ]));
+    $this->cache->put(IdempotencyIndex::SCOPES_KEY, ['user:5'], 3600);
+
+    $this->index->remember(makeMember([
+        'storageKey' => 'hash-short',
+        'identifier' => '6',
+        'expiresAt' => $now + 60,
+    ]));
+
+    expect($this->cache->get(IdempotencyIndex::SCOPES_KEY))->toBe([
+        'user:5' => $now + 3600,
+        'user:6' => $now + 60,
+    ]);
+
+    Carbon::setTestNow(Carbon::parse('2026-01-01 00:00:00')->addSeconds(120));
+
+    $members = $this->index->all();
+
+    expect($members)->toHaveCount(1)
+        ->and($members[0]->storageKey)->toBe('hash-long');
+
+    Carbon::setTestNow();
+});
+
+test('scopes registry expires after its last scope entry', function (): void {
+    Carbon::setTestNow('2026-01-01 00:00:00');
+    $now = Carbon::now()->getTimestamp();
+
+    $this->index->remember(makeMember([
+        'expiresAt' => $now + 60,
+    ]));
+
+    Carbon::setTestNow(Carbon::parse('2026-01-01 00:00:00')->addSeconds(120));
+
+    expect($this->cache->get(IdempotencyIndex::SCOPES_KEY))->toBeNull();
 
     Carbon::setTestNow();
 });
@@ -586,7 +687,7 @@ test('forMember prunes fully expired entries and cleans up the scopes set', func
         ->and($this->cache->get('idempotent-index:user:5'))->toBeNull();
 
     $scopes = $this->cache->get('idempotent-index:scopes');
-    expect($scopes ?? [])->not->toContain('user:5');
+    expect($scopes ?? [])->not->toHaveKey('user:5');
 
     Carbon::setTestNow();
 });
@@ -599,7 +700,7 @@ test('all self-heals a stale scopes-set pointer that no longer has a backing ent
     expect($result)->toBe([]);
 
     $scopes = $this->cache->get('idempotent-index:scopes');
-    expect($scopes ?? [])->not->toContain('user:999');
+    expect($scopes ?? [])->not->toHaveKey('user:999');
 });
 
 test('forget global works without requiring a non-empty identifier', function (): void {
@@ -634,7 +735,7 @@ test('remember refreshes the scopes set even when the entry pointer already exis
     Carbon::setTestNow(Carbon::parse('2026-01-01 00:00:00')->addSeconds(120));
 
     $scopes = $this->cache->get('idempotent-index:scopes');
-    expect($scopes)->toContain('user:5');
+    expect($scopes)->toHaveKey('user:5');
 
     Carbon::setTestNow();
 });
