@@ -17,11 +17,11 @@ final readonly class IdempotencyIndex
 
     public const string ENTRY_PREFIX = 'idempotent-index:';
 
-    private const string SCOPES_LOCK_KEY = 'idempotent-index-lock:scopes';
+    private const string LOCK_KEY = 'idempotent-index-lock';
 
-    private const string ENTRY_LOCK_PREFIX = 'idempotent-index-lock:';
+    private const int LOCK_LEASE = 60;
 
-    private const int LOCK_TIMEOUT = 5;
+    private const int LOCK_WAIT = 5;
 
     public function __construct(
         private Repository $cache,
@@ -29,10 +29,10 @@ final readonly class IdempotencyIndex
 
     public function remember(IndexMember $member): void
     {
-        $entryKey = $this->entryKey($member->scope, $member->identifier);
-        $scopeMember = $this->scopeMember($member->scope, $member->identifier);
+        $this->withLockOrSkip(function () use ($member): void {
+            $entryKey = $this->entryKey($member->scope, $member->identifier);
+            $scopeMember = $this->scopeMember($member->scope, $member->identifier);
 
-        $ttl = $this->withLock(self::ENTRY_LOCK_PREFIX . $scopeMember, function () use ($entryKey, $member): int {
             $entry = $this->loadEntry($entryKey);
             $entry[$member->storageKey] = $member;
 
@@ -40,10 +40,6 @@ final readonly class IdempotencyIndex
 
             $this->cache->put($entryKey, $this->serializeEntry($entry), $ttl);
 
-            return $ttl;
-        });
-
-        $this->withLock(self::SCOPES_LOCK_KEY, function () use ($scopeMember, $ttl): void {
             $scopes = $this->loadScopes();
             if (! in_array($scopeMember, $scopes, true)) {
                 $scopes[] = $scopeMember;
@@ -56,6 +52,51 @@ final readonly class IdempotencyIndex
      * @return list<IndexMember>
      */
     public function forMember(IdempotencyScope $scope, string $identifier): array
+    {
+        return $this->withLock(fn (): array => $this->forMemberWithoutLock($scope, $identifier));
+    }
+
+    /**
+     * @return list<IndexMember>
+     */
+    public function all(): array
+    {
+        return $this->withLock(fn (): array => $this->allWithoutLock());
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function forget(IdempotencyScope $scope, string $identifier): array
+    {
+        return $this->withLock(fn (): array => $this->forgetWithoutLock($scope, $identifier));
+    }
+
+    public function forgetMember(IdempotencyScope $scope, string $identifier, string $storageKey): bool
+    {
+        return $this->withLock(fn (): bool => $this->forgetMemberWithoutLock($scope, $identifier, $storageKey));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function forgetByClientKey(string $clientKey): array
+    {
+        return $this->withLock(fn (): array => $this->forgetByClientKeyWithoutLock($clientKey));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function flush(): array
+    {
+        return $this->withLock(fn (): array => $this->flushWithoutLock());
+    }
+
+    /**
+     * @return list<IndexMember>
+     */
+    private function forMemberWithoutLock(IdempotencyScope $scope, string $identifier): array
     {
         $entryKey = $this->entryKey($scope, $identifier);
         $entry = $this->loadEntry($entryKey);
@@ -83,7 +124,7 @@ final readonly class IdempotencyIndex
     /**
      * @return list<IndexMember>
      */
-    public function all(): array
+    private function allWithoutLock(): array
     {
         $scopes = $this->loadScopes();
         $all = [];
@@ -132,7 +173,7 @@ final readonly class IdempotencyIndex
     /**
      * @return list<string>
      */
-    public function forget(IdempotencyScope $scope, string $identifier): array
+    private function forgetWithoutLock(IdempotencyScope $scope, string $identifier): array
     {
         $entryKey = $this->entryKey($scope, $identifier);
         $entry = $this->loadEntry($entryKey);
@@ -150,7 +191,7 @@ final readonly class IdempotencyIndex
         return $storageKeys;
     }
 
-    public function forgetMember(IdempotencyScope $scope, string $identifier, string $storageKey): bool
+    private function forgetMemberWithoutLock(IdempotencyScope $scope, string $identifier, string $storageKey): bool
     {
         $entryKey = $this->entryKey($scope, $identifier);
         $entry = $this->loadEntry($entryKey);
@@ -176,7 +217,7 @@ final readonly class IdempotencyIndex
     /**
      * @return list<string>
      */
-    public function forgetByClientKey(string $clientKey): array
+    private function forgetByClientKeyWithoutLock(string $clientKey): array
     {
         $removed = [];
         $scopes = $this->loadScopes();
@@ -229,7 +270,7 @@ final readonly class IdempotencyIndex
     /**
      * @return list<string>
      */
-    public function flush(): array
+    private function flushWithoutLock(): array
     {
         $scopes = $this->loadScopes();
         $removed = [];
@@ -402,13 +443,39 @@ final readonly class IdempotencyIndex
         return Carbon::now()->getTimestamp();
     }
 
+    /** @param Closure(): void $callback */
+    private function withLockOrSkip(Closure $callback): void
+    {
+        $store = $this->cache->getStore();
+
+        if (! $store instanceof LockProvider) {
+            $callback();
+
+            return;
+        }
+
+        $lock = $store->lock(self::LOCK_KEY, self::LOCK_LEASE);
+
+        try {
+            $lock->block(self::LOCK_WAIT);
+        } catch (LockTimeoutException) {
+            return;
+        }
+
+        try {
+            $callback();
+        } finally {
+            $lock->release();
+        }
+    }
+
     /**
      * @template TReturn
      *
      * @param  Closure(): TReturn  $callback
      * @return TReturn
      */
-    private function withLock(string $lockKey, Closure $callback): mixed
+    private function withLock(Closure $callback): mixed
     {
         $store = $this->cache->getStore();
 
@@ -416,14 +483,6 @@ final readonly class IdempotencyIndex
             return $callback();
         }
 
-        try {
-            return $store->lock($lockKey, self::LOCK_TIMEOUT)->block(self::LOCK_TIMEOUT, $callback);
-        } catch (LockTimeoutException) {
-            // The index update is bookkeeping for `idempotency:list`/`forget`,
-            // not the replay guarantee (that response is already cached by
-            // the time this runs). Losing the lock race must never turn an
-            // otherwise successful request into a 500.
-            return $callback();
-        }
+        return $store->lock(self::LOCK_KEY, self::LOCK_LEASE)->block(self::LOCK_WAIT, $callback);
     }
 }
