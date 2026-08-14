@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace WendellAdriel\Idempotency\Support;
 
+use Closure;
+use Illuminate\Contracts\Cache\LockProvider;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Support\Carbon;
 use WendellAdriel\Idempotency\Enums\IdempotencyScope;
@@ -14,33 +17,86 @@ final readonly class IdempotencyIndex
 
     public const string ENTRY_PREFIX = 'idempotent-index:';
 
+    private const string LOCK_KEY = 'idempotent-index-lock';
+
+    private const int LOCK_LEASE = 60;
+
+    private const int LOCK_WAIT = 5;
+
     public function __construct(
         private Repository $cache,
     ) {}
 
     public function remember(IndexMember $member): void
     {
-        $entryKey = $this->entryKey($member->scope, $member->identifier);
-        $scopeMember = $this->scopeMember($member->scope, $member->identifier);
+        $this->withLockOrSkip(function () use ($member): void {
+            $entryKey = $this->entryKey($member->scope, $member->identifier);
+            $scopeMember = $this->scopeMember($member->scope, $member->identifier);
 
-        $entry = $this->loadEntry($entryKey);
-        $entry[$member->storageKey] = $member;
+            $entry = $this->loadEntry($entryKey);
+            $entry[$member->storageKey] = $member;
 
-        $ttl = $this->remainingTtl($entry);
+            $ttl = $this->remainingTtl($entry);
 
-        $this->cache->put($entryKey, $this->serializeEntry($entry), $ttl);
+            $this->cache->put($entryKey, $this->serializeEntry($entry), $ttl);
 
-        $scopes = $this->loadScopes();
-        if (! in_array($scopeMember, $scopes, true)) {
-            $scopes[] = $scopeMember;
-        }
-        $this->cache->put(self::SCOPES_KEY, $scopes, $ttl);
+            $scopes = $this->loadScopes();
+            if (! in_array($scopeMember, $scopes, true)) {
+                $scopes[] = $scopeMember;
+            }
+            $this->cache->put(self::SCOPES_KEY, $scopes, $ttl);
+        });
     }
 
     /**
      * @return list<IndexMember>
      */
     public function forMember(IdempotencyScope $scope, string $identifier): array
+    {
+        return $this->withLock(fn (): array => $this->forMemberWithoutLock($scope, $identifier));
+    }
+
+    /**
+     * @return list<IndexMember>
+     */
+    public function all(): array
+    {
+        return $this->withLock(fn (): array => $this->allWithoutLock());
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function forget(IdempotencyScope $scope, string $identifier): array
+    {
+        return $this->withLock(fn (): array => $this->forgetWithoutLock($scope, $identifier));
+    }
+
+    public function forgetMember(IdempotencyScope $scope, string $identifier, string $storageKey): bool
+    {
+        return $this->withLock(fn (): bool => $this->forgetMemberWithoutLock($scope, $identifier, $storageKey));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function forgetByClientKey(string $clientKey): array
+    {
+        return $this->withLock(fn (): array => $this->forgetByClientKeyWithoutLock($clientKey));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function flush(): array
+    {
+        return $this->withLock(fn (): array => $this->flushWithoutLock());
+    }
+
+    /**
+     * @return list<IndexMember>
+     */
+    private function forMemberWithoutLock(IdempotencyScope $scope, string $identifier): array
     {
         $entryKey = $this->entryKey($scope, $identifier);
         $entry = $this->loadEntry($entryKey);
@@ -68,7 +124,7 @@ final readonly class IdempotencyIndex
     /**
      * @return list<IndexMember>
      */
-    public function all(): array
+    private function allWithoutLock(): array
     {
         $scopes = $this->loadScopes();
         $all = [];
@@ -117,7 +173,7 @@ final readonly class IdempotencyIndex
     /**
      * @return list<string>
      */
-    public function forget(IdempotencyScope $scope, string $identifier): array
+    private function forgetWithoutLock(IdempotencyScope $scope, string $identifier): array
     {
         $entryKey = $this->entryKey($scope, $identifier);
         $entry = $this->loadEntry($entryKey);
@@ -135,7 +191,7 @@ final readonly class IdempotencyIndex
         return $storageKeys;
     }
 
-    public function forgetMember(IdempotencyScope $scope, string $identifier, string $storageKey): bool
+    private function forgetMemberWithoutLock(IdempotencyScope $scope, string $identifier, string $storageKey): bool
     {
         $entryKey = $this->entryKey($scope, $identifier);
         $entry = $this->loadEntry($entryKey);
@@ -161,7 +217,7 @@ final readonly class IdempotencyIndex
     /**
      * @return list<string>
      */
-    public function forgetByClientKey(string $clientKey): array
+    private function forgetByClientKeyWithoutLock(string $clientKey): array
     {
         $removed = [];
         $scopes = $this->loadScopes();
@@ -214,7 +270,7 @@ final readonly class IdempotencyIndex
     /**
      * @return list<string>
      */
-    public function flush(): array
+    private function flushWithoutLock(): array
     {
         $scopes = $this->loadScopes();
         $removed = [];
@@ -385,5 +441,48 @@ final readonly class IdempotencyIndex
     private function now(): int
     {
         return Carbon::now()->getTimestamp();
+    }
+
+    /** @param Closure(): void $callback */
+    private function withLockOrSkip(Closure $callback): void
+    {
+        $store = $this->cache->getStore();
+
+        if (! $store instanceof LockProvider) {
+            $callback();
+
+            return;
+        }
+
+        $lock = $store->lock(self::LOCK_KEY, self::LOCK_LEASE);
+
+        try {
+            $lock->block(self::LOCK_WAIT);
+        } catch (LockTimeoutException) {
+            return;
+        }
+
+        try {
+            $callback();
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
+     * @template TReturn
+     *
+     * @param  Closure(): TReturn  $callback
+     * @return TReturn
+     */
+    private function withLock(Closure $callback): mixed
+    {
+        $store = $this->cache->getStore();
+
+        if (! $store instanceof LockProvider) {
+            return $callback();
+        }
+
+        return $store->lock(self::LOCK_KEY, self::LOCK_LEASE)->block(self::LOCK_WAIT, $callback);
     }
 }
