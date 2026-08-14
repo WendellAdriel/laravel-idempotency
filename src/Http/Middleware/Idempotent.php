@@ -158,6 +158,10 @@ final readonly class Idempotent
 
     private function shouldCache(SymfonyResponse $response, IdempotencyOptions $options): bool
     {
+        if ($response->getContent() === false) {
+            return false;
+        }
+
         return ResponseCategory::fromStatusCode($response->getStatusCode())
             ->isEnabledIn($options->cacheStatuses);
     }
