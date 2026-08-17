@@ -21,13 +21,13 @@ final class RequestFingerprint
         ]));
     }
 
-    public function fingerprint(Request $request): string
+    public function fingerprint(Request $request, ?string $idempotencyInput = null): string
     {
         return hash('xxh128', implode('|', [
             strtoupper($request->method()),
             $this->routeIdentity($request),
-            $request->getQueryString() ?? '',
-            $this->hashPayload($request),
+            $this->hashQuery($request, $idempotencyInput),
+            $this->hashPayload($request, $idempotencyInput),
             $request->getContentTypeFormat() ?? '',
         ]));
     }
@@ -44,12 +44,16 @@ final class RequestFingerprint
         };
     }
 
-    private function hashPayload(Request $request): string
+    private function hashPayload(Request $request, ?string $idempotencyInput): string
     {
         if ($request->isJson()) {
             $decoded = json_decode($request->getContent(), true);
 
             if (is_array($decoded)) {
+                if ($idempotencyInput !== null) {
+                    unset($decoded[$idempotencyInput]);
+                }
+
                 $this->recursiveKeySort($decoded);
 
                 return hash('xxh128', (string) json_encode($decoded));
@@ -57,21 +61,41 @@ final class RequestFingerprint
         }
 
         if ($request->request->count() > 0 || $request->files->count() > 0) {
-            return $this->hashFormPayload($request);
+            return $this->hashFormPayload($request, $idempotencyInput);
         }
 
         return hash('xxh128', $request->getContent());
     }
 
-    private function hashFormPayload(Request $request): string
+    private function hashFormPayload(Request $request, ?string $idempotencyInput): string
     {
         $fields = $request->request->all();
+
+        if ($idempotencyInput !== null) {
+            unset($fields[$idempotencyInput]);
+        }
+
         $this->recursiveKeySort($fields);
 
         return hash('xxh128', serialize([
             'fields' => $fields,
             'files' => $this->describeFiles($request->files->all()),
         ]));
+    }
+
+    private function hashQuery(
+        Request $request,
+        ?string $idempotencyInput,
+    ): string {
+        $query = $request->query->all();
+
+        if ($idempotencyInput !== null) {
+            unset($query[$idempotencyInput]);
+        }
+
+        $this->recursiveKeySort($query);
+
+        return hash('xxh128', serialize($query));
     }
 
     /**

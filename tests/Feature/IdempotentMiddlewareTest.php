@@ -252,6 +252,42 @@ test('header takes precedence over request input', function (): void {
     expect($this->controllerExecutionCount)->toBe(2);
 });
 
+test('fallback request input does not affect fingerprint when header takes precedence', function (): void {
+    $this->postJson('/orders', [
+        'item' => 'widget',
+        '_idempotency_key' => 'fallback-key-1',
+    ], ['Idempotency-Key' => 'header-key-1'])
+        ->assertOk()
+        ->assertHeaderMissing('Idempotency-Replayed');
+
+    $this->postJson('/orders', [
+        'item' => 'widget',
+        '_idempotency_key' => 'fallback-key-2',
+    ], ['Idempotency-Key' => 'header-key-1'])
+        ->assertOk()
+        ->assertHeader('Idempotency-Replayed', 'true');
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
+test('fallback form input does not affect fingerprint when header takes precedence', function (): void {
+    $this->post('/orders', [
+        'item' => 'widget',
+        '_idempotency_key' => 'fallback-key-1',
+    ], ['Idempotency-Key' => 'header-key-1'])
+        ->assertOk()
+        ->assertHeaderMissing('Idempotency-Replayed');
+
+    $this->post('/orders', [
+        'item' => 'widget',
+        '_idempotency_key' => 'fallback-key-2',
+    ], ['Idempotency-Key' => 'header-key-1'])
+        ->assertOk()
+        ->assertHeader('Idempotency-Replayed', 'true');
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
 test('header key containing zero takes precedence over request input', function (): void {
     $this->postJson('/orders', [
         'item' => 'widget',
