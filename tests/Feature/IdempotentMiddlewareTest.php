@@ -324,6 +324,20 @@ test('nested fallback metadata is ignored but business siblings still conflict',
     expect($this->controllerExecutionCount)->toBe(1);
 })->with(['json', 'form', 'query']);
 
+test('empty forms replay when fallback metadata is added or removed', function (bool $fallbackFirst): void {
+    $headers = ['Idempotency-Key' => 'empty-form', 'Content-Type' => 'application/x-www-form-urlencoded'];
+    $fallback = ['_idempotency_key' => 'unused'];
+
+    $this->post('/orders', $fallbackFirst ? $fallback : [], $headers)->assertOk();
+    $this->post('/orders', $fallbackFirst ? [] : $fallback, $headers)
+        ->assertOk()->assertHeader('Idempotency-Replayed', 'true');
+    $this->post('/orders', [], $headers)
+        ->assertOk()->assertHeader('Idempotency-Replayed', 'true');
+    $this->post('/orders', ['item' => 'widget'], $headers)->assertStatus(422);
+
+    expect($this->controllerExecutionCount)->toBe(1);
+})->with([true, false]);
+
 test('empty header falls back to request input', function (): void {
     $payload = [
         'item' => 'widget',

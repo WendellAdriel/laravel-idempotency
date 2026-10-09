@@ -76,6 +76,10 @@ final class RequestFingerprint
             Arr::forget($fields, $idempotencyInput);
         }
 
+        if ($idempotencyInput !== null && $fields === [] && $request->files->count() === 0) {
+            return hash('xxh128', '');
+        }
+
         $this->recursiveKeySort($fields);
 
         return hash('xxh128', serialize([
