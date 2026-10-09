@@ -301,6 +301,29 @@ test('header key containing zero takes precedence over request input', function 
         ->and($members[0]->clientKey)->toBe('0');
 });
 
+test('nested fallback metadata is ignored but business siblings still conflict', function (string $format): void {
+    config()->set('idempotency.input', 'meta.key');
+    $headers = ['Idempotency-Key' => 'nested-key'];
+    $first = ['meta' => ['key' => 'first', 'item' => 'widget']];
+    $retry = ['meta' => ['key' => 'second', 'item' => 'widget']];
+    $changed = ['meta' => ['key' => 'second', 'item' => 'different']];
+
+    if ($format === 'query') {
+        $this->post('/orders?' . http_build_query($first), [], $headers)->assertOk();
+        $this->post('/orders?' . http_build_query($retry), [], $headers)
+            ->assertOk()->assertHeader('Idempotency-Replayed', 'true');
+        $this->post('/orders?' . http_build_query($changed), [], $headers)->assertStatus(422);
+    } else {
+        $method = $format === 'json' ? 'postJson' : 'post';
+        $this->{$method}('/orders', $first, $headers)->assertOk();
+        $this->{$method}('/orders', $retry, $headers)
+            ->assertOk()->assertHeader('Idempotency-Replayed', 'true');
+        $this->{$method}('/orders', $changed, $headers)->assertStatus(422);
+    }
+
+    expect($this->controllerExecutionCount)->toBe(1);
+})->with(['json', 'form', 'query']);
+
 test('empty header falls back to request input', function (): void {
     $payload = [
         'item' => 'widget',

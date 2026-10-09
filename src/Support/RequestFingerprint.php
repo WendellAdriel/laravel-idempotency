@@ -6,6 +6,7 @@ namespace WendellAdriel\Idempotency\Support;
 
 use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
+use Illuminate\Support\Arr;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 
 final class RequestFingerprint
@@ -51,7 +52,7 @@ final class RequestFingerprint
 
             if (is_array($decoded)) {
                 if ($idempotencyInput !== null) {
-                    unset($decoded[$idempotencyInput]);
+                    Arr::forget($decoded, $idempotencyInput);
                 }
 
                 $this->recursiveKeySort($decoded);
@@ -72,7 +73,7 @@ final class RequestFingerprint
         $fields = $request->request->all();
 
         if ($idempotencyInput !== null) {
-            unset($fields[$idempotencyInput]);
+            Arr::forget($fields, $idempotencyInput);
         }
 
         $this->recursiveKeySort($fields);
@@ -90,7 +91,7 @@ final class RequestFingerprint
         $query = $request->query->all();
 
         if ($idempotencyInput !== null) {
-            unset($query[$idempotencyInput]);
+            Arr::forget($query, $idempotencyInput);
         }
 
         $this->recursiveKeySort($query);
