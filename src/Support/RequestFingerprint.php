@@ -6,6 +6,7 @@ namespace WendellAdriel\Idempotency\Support;
 
 use Illuminate\Http\Request;
 use Illuminate\Routing\Route;
+use Illuminate\Support\Arr;
 use Symfony\Component\HttpFoundation\File\UploadedFile;
 
 final class RequestFingerprint
@@ -21,13 +22,13 @@ final class RequestFingerprint
         ]));
     }
 
-    public function fingerprint(Request $request): string
+    public function fingerprint(Request $request, ?string $idempotencyInput = null): string
     {
         return hash('xxh128', implode('|', [
             strtoupper($request->method()),
             $this->routeIdentity($request),
-            $request->getQueryString() ?? '',
-            $this->hashPayload($request),
+            $this->queryString($request, $idempotencyInput),
+            $this->hashPayload($request, $idempotencyInput),
             $request->getContentTypeFormat() ?? '',
         ]));
     }
@@ -44,12 +45,16 @@ final class RequestFingerprint
         };
     }
 
-    private function hashPayload(Request $request): string
+    private function hashPayload(Request $request, ?string $idempotencyInput): string
     {
         if ($request->isJson()) {
             $decoded = json_decode($request->getContent(), true);
 
             if (is_array($decoded)) {
+                if ($idempotencyInput !== null) {
+                    Arr::forget($decoded, $idempotencyInput);
+                }
+
                 $this->recursiveKeySort($decoded);
 
                 return hash('xxh128', (string) json_encode($decoded));
@@ -57,21 +62,46 @@ final class RequestFingerprint
         }
 
         if ($request->request->count() > 0 || $request->files->count() > 0) {
-            return $this->hashFormPayload($request);
+            return $this->hashFormPayload($request, $idempotencyInput);
         }
 
         return hash('xxh128', $request->getContent());
     }
 
-    private function hashFormPayload(Request $request): string
+    private function hashFormPayload(Request $request, ?string $idempotencyInput): string
     {
         $fields = $request->request->all();
+
+        if ($idempotencyInput !== null) {
+            Arr::forget($fields, $idempotencyInput);
+        }
+
+        if ($idempotencyInput !== null && $fields === [] && $request->files->count() === 0) {
+            return hash('xxh128', '');
+        }
+
         $this->recursiveKeySort($fields);
 
         return hash('xxh128', serialize([
             'fields' => $fields,
             'files' => $this->describeFiles($request->files->all()),
         ]));
+    }
+
+    private function queryString(Request $request, ?string $idempotencyInput): string
+    {
+        if ($idempotencyInput === null) {
+            return $request->getQueryString() ?? '';
+        }
+
+        $query = $request->query->all();
+        Arr::forget($query, $idempotencyInput);
+
+        if ($query === $request->query->all()) {
+            return $request->getQueryString() ?? '';
+        }
+
+        return Request::normalizeQueryString(http_build_query($query, '', '&', PHP_QUERY_RFC3986));
     }
 
     /**

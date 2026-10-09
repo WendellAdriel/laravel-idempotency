@@ -252,6 +252,42 @@ test('header takes precedence over request input', function (): void {
     expect($this->controllerExecutionCount)->toBe(2);
 });
 
+test('fallback request input does not affect fingerprint when header takes precedence', function (): void {
+    $this->postJson('/orders', [
+        'item' => 'widget',
+        '_idempotency_key' => 'fallback-key-1',
+    ], ['Idempotency-Key' => 'header-key-1'])
+        ->assertOk()
+        ->assertHeaderMissing('Idempotency-Replayed');
+
+    $this->postJson('/orders', [
+        'item' => 'widget',
+        '_idempotency_key' => 'fallback-key-2',
+    ], ['Idempotency-Key' => 'header-key-1'])
+        ->assertOk()
+        ->assertHeader('Idempotency-Replayed', 'true');
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
+test('fallback form input does not affect fingerprint when header takes precedence', function (): void {
+    $this->post('/orders', [
+        'item' => 'widget',
+        '_idempotency_key' => 'fallback-key-1',
+    ], ['Idempotency-Key' => 'header-key-1'])
+        ->assertOk()
+        ->assertHeaderMissing('Idempotency-Replayed');
+
+    $this->post('/orders', [
+        'item' => 'widget',
+        '_idempotency_key' => 'fallback-key-2',
+    ], ['Idempotency-Key' => 'header-key-1'])
+        ->assertOk()
+        ->assertHeader('Idempotency-Replayed', 'true');
+
+    expect($this->controllerExecutionCount)->toBe(1);
+});
+
 test('header key containing zero takes precedence over request input', function (): void {
     $this->postJson('/orders', [
         'item' => 'widget',
@@ -264,6 +300,76 @@ test('header key containing zero takes precedence over request input', function 
     expect($members)->toHaveCount(1)
         ->and($members[0]->clientKey)->toBe('0');
 });
+
+test('nested fallback metadata is ignored but business siblings still conflict', function (string $format): void {
+    config()->set('idempotency.input', 'meta.key');
+    $headers = ['Idempotency-Key' => 'nested-key'];
+    $first = ['meta' => ['key' => 'first', 'item' => 'widget']];
+    $retry = ['meta' => ['key' => 'second', 'item' => 'widget']];
+    $changed = ['meta' => ['key' => 'second', 'item' => 'different']];
+
+    if ($format === 'query') {
+        $this->post('/orders?' . http_build_query($first), [], $headers)->assertOk();
+        $this->post('/orders?' . http_build_query($retry), [], $headers)
+            ->assertOk()->assertHeader('Idempotency-Replayed', 'true');
+        $this->post('/orders?' . http_build_query($changed), [], $headers)->assertStatus(422);
+    } else {
+        $method = $format === 'json' ? 'postJson' : 'post';
+        $this->{$method}('/orders', $first, $headers)->assertOk();
+        $this->{$method}('/orders', $retry, $headers)
+            ->assertOk()->assertHeader('Idempotency-Replayed', 'true');
+        $this->{$method}('/orders', $changed, $headers)->assertStatus(422);
+    }
+
+    expect($this->controllerExecutionCount)->toBe(1);
+})->with(['json', 'form', 'query']);
+
+test('empty forms replay when fallback metadata is added or removed', function (bool $fallbackFirst): void {
+    $headers = ['Idempotency-Key' => 'empty-form', 'Content-Type' => 'application/x-www-form-urlencoded'];
+    $fallback = ['_idempotency_key' => 'unused'];
+
+    $this->post('/orders', $fallbackFirst ? $fallback : [], $headers)->assertOk();
+    $this->post('/orders', $fallbackFirst ? [] : $fallback, $headers)
+        ->assertOk()->assertHeader('Idempotency-Replayed', 'true');
+    $this->post('/orders', [], $headers)
+        ->assertOk()->assertHeader('Idempotency-Replayed', 'true');
+    $this->post('/orders', ['item' => 'widget'], $headers)->assertStatus(422);
+
+    expect($this->controllerExecutionCount)->toBe(1);
+})->with([true, false]);
+
+test('responses cached with legacy fingerprints still replay exact retries', function (bool $fallback, string $format, string $query): void {
+    config()->set('idempotency.scope', 'global');
+    $payload = ['item' => 'widget'];
+
+    if ($fallback) {
+        $payload['_idempotency_key'] = 'unused';
+    }
+
+    ksort($payload);
+    $payloadHash = $format === 'json'
+        ? hash('xxh128', (string) json_encode($payload))
+        : hash('xxh128', serialize(['fields' => $payload, 'files' => []]));
+    $legacyFingerprint = hash('xxh128', implode('|', [
+        'POST', 'orders.store', $query, $payloadHash, $format,
+    ]));
+    $storageKey = hash('xxh128', 'orders.store|POST|global|Idempotency-Key|legacy-key');
+    $cache = app(IdempotencyCache::class);
+    $cache->put($storageKey, $cache->serializeResponse(response()->json(['id' => 1]), $legacyFingerprint), 3600);
+
+    $method = $format === 'json' ? 'postJson' : 'post';
+    $headers = ['Idempotency-Key' => 'legacy-key', 'Content-Type' => $format === 'json' ? 'application/json' : 'application/x-www-form-urlencoded'];
+    $uri = '/orders' . ($query === '' ? '' : '?' . $query);
+
+    $this->{$method}($uri, $payload, $headers)
+        ->assertOk()->assertHeader('Idempotency-Replayed', 'true');
+    $this->{$method}($uri, [...$payload, 'item' => 'different'], $headers)
+        ->assertStatus(422);
+    $this->{$method}('/orders?source=other', $payload, $headers)
+        ->assertStatus(422);
+
+    expect($this->controllerExecutionCount)->toBe(0);
+})->with([false, true])->with(['json', 'form'])->with(['', 'source=checkout']);
 
 test('empty header falls back to request input', function (): void {
     $payload = [

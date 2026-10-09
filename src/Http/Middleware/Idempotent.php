@@ -97,11 +97,11 @@ final readonly class Idempotent
             ? IdempotencyScope::Global->value
             : sprintf('%s:%s', $resolvedScope->value, $identifier);
         $storageKey = $this->fingerprint->storageKey($request, $scopePrefix, $options->header, $clientKey);
-        $fingerprint = $this->fingerprint->fingerprint($request);
+        $fingerprint = $this->fingerprint->fingerprint($request, $options->input);
         $stored = $this->idempotencyCache->get($storageKey);
 
         if ($stored instanceof StoredResponse) {
-            if ($stored->fingerprint !== $fingerprint) {
+            if ($stored->fingerprint !== $fingerprint && $stored->fingerprint !== $this->fingerprint->fingerprint($request)) {
                 throw new HttpException(Response::HTTP_UNPROCESSABLE_ENTITY, 'Idempotency key already used with different request parameters.');
             }
 
