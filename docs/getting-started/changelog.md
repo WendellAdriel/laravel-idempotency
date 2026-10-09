@@ -2,6 +2,12 @@
 
 Here's a quick overview of the new features in the latest major versions of the package.
 
+## 1.5.1
+
+* Excluded fallback idempotency inputs, including nested paths, from JSON, form, and query fingerprints.
+* Fixed empty form replay when unused fallback inputs are added or removed.
+* Preserved exact retry replay for responses cached with the previous fingerprint format.
+
 ## 1.5.0
 
 * Fixed the maintenance index expiring before entries with longer TTLs.
