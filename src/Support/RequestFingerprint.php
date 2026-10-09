@@ -27,7 +27,7 @@ final class RequestFingerprint
         return hash('xxh128', implode('|', [
             strtoupper($request->method()),
             $this->routeIdentity($request),
-            $this->hashQuery($request, $idempotencyInput),
+            $this->queryString($request, $idempotencyInput),
             $this->hashPayload($request, $idempotencyInput),
             $request->getContentTypeFormat() ?? '',
         ]));
@@ -88,19 +88,20 @@ final class RequestFingerprint
         ]));
     }
 
-    private function hashQuery(
-        Request $request,
-        ?string $idempotencyInput,
-    ): string {
-        $query = $request->query->all();
-
-        if ($idempotencyInput !== null) {
-            Arr::forget($query, $idempotencyInput);
+    private function queryString(Request $request, ?string $idempotencyInput): string
+    {
+        if ($idempotencyInput === null) {
+            return $request->getQueryString() ?? '';
         }
 
-        $this->recursiveKeySort($query);
+        $query = $request->query->all();
+        Arr::forget($query, $idempotencyInput);
 
-        return hash('xxh128', serialize($query));
+        if ($query === $request->query->all()) {
+            return $request->getQueryString() ?? '';
+        }
+
+        return Request::normalizeQueryString(http_build_query($query, '', '&', PHP_QUERY_RFC3986));
     }
 
     /**

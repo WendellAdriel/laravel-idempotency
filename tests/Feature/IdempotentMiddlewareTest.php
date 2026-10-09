@@ -338,6 +338,39 @@ test('empty forms replay when fallback metadata is added or removed', function (
     expect($this->controllerExecutionCount)->toBe(1);
 })->with([true, false]);
 
+test('responses cached with legacy fingerprints still replay exact retries', function (bool $fallback, string $format, string $query): void {
+    config()->set('idempotency.scope', 'global');
+    $payload = ['item' => 'widget'];
+
+    if ($fallback) {
+        $payload['_idempotency_key'] = 'unused';
+    }
+
+    ksort($payload);
+    $payloadHash = $format === 'json'
+        ? hash('xxh128', (string) json_encode($payload))
+        : hash('xxh128', serialize(['fields' => $payload, 'files' => []]));
+    $legacyFingerprint = hash('xxh128', implode('|', [
+        'POST', 'orders.store', $query, $payloadHash, $format,
+    ]));
+    $storageKey = hash('xxh128', 'orders.store|POST|global|Idempotency-Key|legacy-key');
+    $cache = app(IdempotencyCache::class);
+    $cache->put($storageKey, $cache->serializeResponse(response()->json(['id' => 1]), $legacyFingerprint), 3600);
+
+    $method = $format === 'json' ? 'postJson' : 'post';
+    $headers = ['Idempotency-Key' => 'legacy-key', 'Content-Type' => $format === 'json' ? 'application/json' : 'application/x-www-form-urlencoded'];
+    $uri = '/orders' . ($query === '' ? '' : '?' . $query);
+
+    $this->{$method}($uri, $payload, $headers)
+        ->assertOk()->assertHeader('Idempotency-Replayed', 'true');
+    $this->{$method}($uri, [...$payload, 'item' => 'different'], $headers)
+        ->assertStatus(422);
+    $this->{$method}('/orders?source=other', $payload, $headers)
+        ->assertStatus(422);
+
+    expect($this->controllerExecutionCount)->toBe(0);
+})->with([false, true])->with(['json', 'form'])->with(['', 'source=checkout']);
+
 test('empty header falls back to request input', function (): void {
     $payload = [
         'item' => 'widget',
